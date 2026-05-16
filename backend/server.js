@@ -1,51 +1,41 @@
-/**
- * server.js — updated with FAQ + shop API routes
- */
-
 const express = require("express");
 const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const { createSession, destroySession } = require("./whatsappManager");
-const faqRoutes = require("./faqRoutes");
+const faqRoutes  = require("./faqRoutes");
 const shopRoutes = require("./shopRoutes");
+const docRoutes  = require("./docRoutes");
 
 const PORT = process.env.PORT || 5000;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
 
 const app = express();
-app.use(cors({ origin: FRONTEND_ORIGIN, methods: ["GET", "POST", "PATCH", "DELETE"] }));
+app.use(cors({ origin: FRONTEND_ORIGIN, methods: ["GET","POST","PATCH","DELETE"] }));
 app.use(express.json());
 
-// Health check
-app.get("/health", (_req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));
-
-// API routes
+app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/faqs", faqRoutes);
+app.use("/api/docs", docRoutes);
 app.use("/api", shopRoutes);
 
 const httpServer = http.createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: FRONTEND_ORIGIN, methods: ["GET", "POST"] },
+  cors: { origin: FRONTEND_ORIGIN, methods: ["GET","POST"] },
   pingTimeout: 60000,
 });
 
 io.on("connection", (socket) => {
   const shopId = socket.handshake.query?.shopId;
-  if (!shopId) {
-    socket.emit("error", { message: "shopId is required" });
-    socket.disconnect(true);
-    return;
-  }
+  if (!shopId) { socket.disconnect(true); return; }
 
-  console.log(`[${shopId}] Client connected (socketId: ${socket.id})`);
+  console.log(`[${shopId}] Client connected`);
 
   socket.on("start_session", async () => {
     try {
       socket.emit("status", { status: "connecting" });
       await createSession(shopId, socket);
     } catch (err) {
-      console.error(`[${shopId}] Failed to create session:`, err);
       socket.emit("error", { message: "Failed to start WhatsApp session" });
     }
   });
