@@ -112,7 +112,7 @@ export default function ConnectBotPage() {
               {
                 step: "3",
                 title: "Link a Device",
-                desc: "Tap 'Link a Device' and scan the QR code shown.",
+                desc: "Tap "Link a Device" and scan the QR code shown.",
               },
               {
                 step: "4",
