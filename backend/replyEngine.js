@@ -1,14 +1,15 @@
 /**
- * replyEngine.js — Full AI Sales Assistant
+ * replyEngine.js — Full AI Sales Assistant (Updated to Gemini API)
  * 1. Load FAQs + knowledge docs from Supabase
  * 2. Try keyword match
  * 3. AI reply with full business context + conversation memory
  */
 
-const Anthropic = require("@anthropic-ai/sdk");
+const { GoogleGenAI } = require("@google/genai"); // Anthropic ain karala Gemini aluth SDK eka damma
 const supabase = require("./supabaseClient");
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Gemini client eka initialize කරනවා (.env eke GEMINI_API_KEY thiyenna ඕනෙ)
+const ai = new GoogleGenAI(); 
 
 // Simple in-memory conversation store: Map<jid, message[]>
 const conversationHistory = new Map();
@@ -60,7 +61,7 @@ async function buildContext(shopId) {
   if (docs && docs.length > 0) {
     context += "## Business Knowledge Documents\n";
     docs.forEach((doc) => {
-      // Limit each doc to 3000 chars to stay within token limits
+      // Gemini walata loku context ekak unath thiyanna puluwan, eth limits thiyaganna eka hodai
       const content = doc.content.slice(0, 3000);
       context += `### ${doc.file_name}\n${content}\n\n`;
     });
@@ -80,9 +81,9 @@ async function aiReply(shopId, senderJid, text) {
   const history = conversationHistory.get(senderJid);
 
   // Add new user message
-  history.push({ role: "user", content: text });
+  history.push({ role: "user", parts: [{ text: text }] }); // Gemini chat format ekata 'parts' damma
 
-  // Keep only last N messages
+  // Keep only last N messages (user + model roles dekama nisa x2 karanne)
   if (history.length > MAX_HISTORY * 2) {
     history.splice(0, 2);
   }
@@ -101,17 +102,20 @@ RULES:
 BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
-  const response = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 400,
-    system: systemPrompt,
-    messages: history,
+  // Gemini API එකෙන් response එක generate කිරීම
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash", // Speed සහ Cost අතින් WhatsApp Bot කෙනෙකුට සුපිරිම Model එක
+    contents: history,
+    config: {
+      systemInstruction: systemPrompt, // Claude වල system එක වෙනුවට Gemini config.systemInstruction
+      maxOutputTokens: 400,
+    }
   });
 
-  const reply = response.content[0].text;
+  const reply = response.text;
 
   // Save assistant reply to history
-  history.push({ role: "assistant", content: reply });
+  history.push({ role: "model", parts: [{ text: reply }] }); // Anthropic assistant -> Gemini model වෙනස් වුණා
 
   return reply;
 }
@@ -151,7 +155,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     }
 
     // 2. AI fallback with full context + memory
-    if (!reply && process.env.ANTHROPIC_API_KEY) {
+    if (!reply && process.env.GEMINI_API_KEY) { // Env variable name eka change kala
       try {
         reply = await aiReply(shopId, senderJid, text);
         replyType = "ai";
