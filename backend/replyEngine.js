@@ -1,6 +1,6 @@
 /**
- * replyEngine.js — Gemini AI Version (Creative AI First Model)
- * Prioritizes Gemini AI to blend FAQs and Knowledge Docs creatively.
+ * replyEngine.js — Gemini AI Version (Creative AI First with Resilient Fallback)
+ * Prioritizes Gemini AI, but safely falls back to keywords if API Quota (429) hits.
  */
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -11,11 +11,10 @@ if (process.env.GEMINI_API_KEY) {
   genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 }
 
-// Conversation history: Map<senderJid, messages[]>
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
-// ── Keyword match (Now used as a fallback if AI fails) ───────────────────────
+// ── Keyword match (Used as standard fallback) ───────────────────────────────
 async function keywordMatch(shopId, text) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -52,18 +51,16 @@ async function buildContext(shopId) {
 
   let context = "";
 
-  // 1. FAQs දත්ත AI එකට කියවන්න දෙනවා
   if (faqs && faqs.length > 0) {
     context += "## Frequently Asked Questions (Use this as reference)\n";
     context += faqs.map((f) => `Question: ${f.question}\nSuggested Answer: ${f.answer}`).join("\n\n");
     context += "\n\n";
   }
 
-  // 2. ඔයා ට්‍රේන් කරන්න දාපු Knowledge Documents මෙතනින් AI එකට යනවා
   if (docs && docs.length > 0) {
     context += "## Deep Business Knowledge & Training Documents\n";
     docs.forEach((doc) => {
-      const content = doc.content.slice(0, 4000); // වැඩි ඉඩක් දෙනවා කියවන්න
+      const content = doc.content.slice(0, 4000);
       context += `### Document: ${doc.file_name}\n${content}\n\n`;
     });
   }
@@ -85,7 +82,6 @@ async function aiReply(shopId, senderJid, text) {
   }
   const history = conversationHistory.get(senderJid);
 
-  // AI එකට ක්‍රියේටිව් සහ නැචුරල් වෙන්න ප්‍රොම්ප්ට් එක අප්ඩේට් කලා
   const systemPrompt = `You are a smart, highly creative, and friendly WhatsApp sales assistant for this business. 
 
 YOUR MISSION:
@@ -103,47 +99,46 @@ RULES:
 BUSINESS KNOWLEDGE BASE & TRAINED DATA:
 ${context}`;
 
-  try {
-    const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash"];
-    let model;
-    let result;
-    let success = false;
+  // 429 errors මඟහරින්න 1.5-flash එකත් අන්තිමට තියෙන්න ඇරියා ට්‍රැෆික් වැඩි වෙලාවට
+  const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+  let model;
+  let result;
+  let success = false;
 
-    for (const modelName of modelsToTry) {
-      try {
-        model = genAI.getGenerativeModel({ model: modelName });
+  for (const modelName of modelsToTry) {
+    try {
+      model = genAI.getGenerativeModel({ model: modelName });
 
-        let fullPrompt = systemPrompt + "\n\n";
-        history.forEach(msg => {
-          fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Assistant: ${msg.content}\n`;
-        });
-        fullPrompt += `Customer: ${text}\nAssistant:`;
+      let fullPrompt = systemPrompt + "\n\n";
+      history.forEach(msg => {
+        fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Assistant: ${msg.content}\n`;
+      });
+      fullPrompt += `Customer: ${text}\nAssistant:`;
 
-        result = await model.generateContent(fullPrompt);
-        success = true;
-        break; 
-      } catch (modelErr) {
-        console.error(`Model ${modelName} failed during creative reply:`, modelErr.message);
-      }
+      result = await model.generateContent(fullPrompt);
+      success = true;
+      break; 
+    } catch (modelErr) {
+      console.error(`Model ${modelName} failed during creative reply:`, modelErr.message);
+      // මෙතනදී Error එක 429 (Quota) නම් ඊළඟ මොඩල් එකට යන්න ඉඩ දෙනවා
     }
-
-    if (!success) return null;
-
-    const response = await result.response;
-    const reply = response.text();
-
-    history.push({ role: "user", content: text });
-    history.push({ role: "assistant", content: reply });
-
-    if (history.length > MAX_HISTORY * 2) {
-      history.splice(0, 2);
-    }
-
-    return reply;
-  } catch (err) {
-    console.error("Gemini API error detail:", err);
-    return null;
   }
+
+  if (!success) {
+    return null; // AI එක සම්පූර්ණයෙන්ම ෆේල් වුණොත් null යවනවා handleIncomingMessage එකට fallback වෙන්න
+  }
+
+  const response = await result.response;
+  const reply = response.text();
+
+  history.push({ role: "user", content: text });
+  history.push({ role: "assistant", content: reply });
+
+  if (history.length > MAX_HISTORY * 2) {
+    history.splice(0, 2);
+  }
+
+  return reply;
 }
 
 // ── Log to Supabase ───────────────────────────────────────────────────────────
@@ -157,7 +152,7 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
   });
 }
 
-// ── Main handler (AI First Logic) ─────────────────────────────────────────────
+// ── Main handler (Resilient AI First Logic) ───────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
     const { data: shop } = await supabase
@@ -174,20 +169,28 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // පියවර 1: මුලින්ම AI එකට දීලා ක්‍රියේටිව් උත්තරයක් හදනවා (Blending FAQs + Docs)
+    // පියවර 1: AI එකෙන් උත්තරයක් ගන්න බලනවා
     if (process.env.GEMINI_API_KEY) {
       try {
         reply = await aiReply(shopId, senderJid, text);
         if (reply) replyType = "ai";
       } catch (err) {
-        console.error(`[${shopId}] AI reply error, falling back to keywords:`, err.message);
+        console.error(`[${shopId}] General AI reply error:`, err.message);
       }
     }
 
-    // පියවර 2: මොකක් හරි හේතුවකින් AI එක ෆේල් වුණොත් විතරක් static FAQ එකෙන් උත්තරයක් ගන්නවා
+    // පියවර 2: Gemini Quota Exceed වුණොත් හෝ වෙනත් අවුලකින් AI null වුණොත්,
+    // සිස්ටම් එක ගොළු වෙන්න නොදී කෙලින්ම Keyword Match එකෙන් උත්තරයක් හොයනවා.
     if (!reply) {
+      console.log(`[${shopId}] AI failed or hit limits. Falling back to Keyword Matching...`);
       reply = await keywordMatch(shopId, text);
-      if (reply) replyType = "keyword_fallback";
+      if (reply) {
+        replyType = "keyword_fallback";
+      } else {
+        // Keyword එකකුත් නැත්නම් default fallback මැසේජ් එකක් දෙනවා බොට් නැවතීම පේන්න නොදී
+        reply = "ඔබගේ පණිවිඩයට ස්තූතියි! අපගේ නියෝජිතයෙකු ළඟදීම ඔබව සම්බන්ධ කරගනු ඇත. 😊";
+        replyType = "default_fallback";
+      }
     }
 
     // පියවර 3: මැසේජ් එක යවනවා
