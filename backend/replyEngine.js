@@ -1,19 +1,19 @@
 /**
- * replyEngine.js — Full AI Sales Assistant (Updated to Gemini API)
- * 1. Load FAQs + knowledge docs from Supabase
- * 2. Try keyword match
- * 3. AI reply with full business context + conversation memory
+ * replyEngine.js — Gemini AI Version
+ * Uses Google Gemini instead of Claude
  */
 
-const { GoogleGenAI } = require("@google/genai"); // Anthropic ain karala Gemini aluth SDK eka damma
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const supabase = require("./supabaseClient");
 
-// Gemini client eka initialize කරනවා (.env eke GEMINI_API_KEY thiyenna ඕනෙ)
-const ai = new GoogleGenAI(); 
+let genAI;
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+}
 
-// Simple in-memory conversation store: Map<jid, message[]>
+// Conversation history
 const conversationHistory = new Map();
-const MAX_HISTORY = 10; // keep last 10 messages per customer
+const MAX_HISTORY = 10;
 
 // ── Keyword match ─────────────────────────────────────────────────────────────
 async function keywordMatch(shopId, text) {
@@ -35,16 +35,14 @@ async function keywordMatch(shopId, text) {
   return null;
 }
 
-// ── Build AI context from FAQs + uploaded docs ────────────────────────────────
+// ── Build context ─────────────────────────────────────────────────────────────
 async function buildContext(shopId) {
-  // FAQs
   const { data: faqs } = await supabase
     .from("faqs")
     .select("question, answer")
     .eq("shop_id", shopId)
     .eq("is_active", true);
 
-  // Knowledge docs
   const { data: docs } = await supabase
     .from("knowledge_docs")
     .select("file_name, content")
@@ -61,7 +59,6 @@ async function buildContext(shopId) {
   if (docs && docs.length > 0) {
     context += "## Business Knowledge Documents\n";
     docs.forEach((doc) => {
-      // Gemini walata loku context ekak unath thiyanna puluwan, eth limits thiyaganna eka hodai
       const content = doc.content.slice(0, 3000);
       context += `### ${doc.file_name}\n${content}\n\n`;
     });
@@ -70,23 +67,20 @@ async function buildContext(shopId) {
   return context || "No knowledge base available yet.";
 }
 
-// ── AI reply with conversation memory ─────────────────────────────────────────
+// ── Gemini AI reply ───────────────────────────────────────────────────────────
 async function aiReply(shopId, senderJid, text) {
+  if (!genAI) {
+    console.log("Gemini API key not configured");
+    return null;
+  }
+
   const context = await buildContext(shopId);
 
-  // Get or init conversation history
+  // Get conversation history
   if (!conversationHistory.has(senderJid)) {
     conversationHistory.set(senderJid, []);
   }
   const history = conversationHistory.get(senderJid);
-
-  // Add new user message
-  history.push({ role: "user", parts: [{ text: text }] }); // Gemini chat format ekata 'parts' damma
-
-  // Keep only last N messages (user + model roles dekama nisa x2 karanne)
-  if (history.length > MAX_HISTORY * 2) {
-    history.splice(0, 2);
-  }
 
   const systemPrompt = `You are a smart, friendly WhatsApp sales assistant for this business. Your job is to help customers, answer questions, suggest products/services, and close sales.
 
@@ -102,22 +96,40 @@ RULES:
 BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
-  // Gemini API එකෙන් response එක generate කිරීම
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash", // Speed සහ Cost අතින් WhatsApp Bot කෙනෙකුට සුපිරිම Model එක
-    contents: history,
-    config: {
-      systemInstruction: systemPrompt, // Claude වල system එක වෙනුවට Gemini config.systemInstruction
-      maxOutputTokens: 400,
+  // Build chat history for Gemini
+  const chatHistory = history.map(msg => ({
+    role: msg.role === "user" ? "user" : "model",
+    parts: [{ text: msg.content }]
+  }));
+
+  try {
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    
+    const chat = model.startChat({
+      history: chatHistory,
+      generationConfig: {
+        maxOutputTokens: 400,
+        temperature: 0.7,
+      },
+    });
+
+    const result = await chat.sendMessage(systemPrompt + "\n\nCustomer: " + text);
+    const reply = result.response.text();
+
+    // Save to history
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: reply });
+
+    // Keep only last N messages
+    if (history.length > MAX_HISTORY * 2) {
+      history.splice(0, 2);
     }
-  });
 
-  const reply = response.text;
-
-  // Save assistant reply to history
-  history.push({ role: "model", parts: [{ text: reply }] }); // Anthropic assistant -> Gemini model වෙනස් වුණා
-
-  return reply;
+    return reply;
+  } catch (err) {
+    console.error("Gemini API error:", err.message);
+    return null;
+  }
 }
 
 // ── Log to Supabase ───────────────────────────────────────────────────────────
@@ -148,14 +160,14 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. Keyword match first (fast)
+    // 1. Keyword match
     reply = await keywordMatch(shopId, text);
     if (reply) {
       replyType = "keyword";
     }
 
-    // 2. AI fallback with full context + memory
-    if (!reply && process.env.GEMINI_API_KEY) { // Env variable name eka change kala
+    // 2. AI fallback
+    if (!reply && process.env.GEMINI_API_KEY) {
       try {
         reply = await aiReply(shopId, senderJid, text);
         replyType = "ai";
