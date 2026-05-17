@@ -1,6 +1,6 @@
 /**
- * replyEngine.js — Gemini AI Version (Multi-Model Auto Fallback)
- * Uses Google Gemini API for smart replies with 2.5/2.0 support
+ * replyEngine.js — Gemini AI Version (Creative AI First Model)
+ * Prioritizes Gemini AI to blend FAQs and Knowledge Docs creatively.
  */
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -15,7 +15,7 @@ if (process.env.GEMINI_API_KEY) {
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
-// ── Keyword match ─────────────────────────────────────────────────────────────
+// ── Keyword match (Now used as a fallback if AI fails) ───────────────────────
 async function keywordMatch(shopId, text) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -52,17 +52,19 @@ async function buildContext(shopId) {
 
   let context = "";
 
+  // 1. FAQs දත්ත AI එකට කියවන්න දෙනවා
   if (faqs && faqs.length > 0) {
-    context += "## FAQ / Quick Answers\n";
-    context += faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n");
+    context += "## Frequently Asked Questions (Use this as reference)\n";
+    context += faqs.map((f) => `Question: ${f.question}\nSuggested Answer: ${f.answer}`).join("\n\n");
     context += "\n\n";
   }
 
+  // 2. ඔයා ට්‍රේන් කරන්න දාපු Knowledge Documents මෙතනින් AI එකට යනවා
   if (docs && docs.length > 0) {
-    context += "## Business Knowledge Documents\n";
+    context += "## Deep Business Knowledge & Training Documents\n";
     docs.forEach((doc) => {
-      const content = doc.content.slice(0, 3000);
-      context += `### ${doc.file_name}\n${content}\n\n`;
+      const content = doc.content.slice(0, 4000); // වැඩි ඉඩක් දෙනවා කියවන්න
+      context += `### Document: ${doc.file_name}\n${content}\n\n`;
     });
   }
 
@@ -78,42 +80,39 @@ async function aiReply(shopId, senderJid, text) {
 
   const context = await buildContext(shopId);
 
-  // Get conversation history
   if (!conversationHistory.has(senderJid)) {
     conversationHistory.set(senderJid, []);
   }
   const history = conversationHistory.get(senderJid);
 
-  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant for this business. Your job is to help customers, answer questions, suggest products/services, and close sales.
+  // AI එකට ක්‍රියේටිව් සහ නැචුරල් වෙන්න ප්‍රොම්ප්ට් එක අප්ඩේට් කලා
+  const systemPrompt = `You are a smart, highly creative, and friendly WhatsApp sales assistant for this business. 
+
+YOUR MISSION:
+- Answer customer questions using BOTH the FAQ reference AND the Deep Business Knowledge Documents provided below.
+- Do NOT just copy-paste answers. Be conversational, natural, and helpful.
+- Mix the information intelligently to give the best personalized response.
 
 RULES:
-- Reply in the SAME language the customer uses (Sinhala, English, etc.)
-- Keep replies SHORT and conversational (2-4 sentences max for WhatsApp)
-- Use emojis naturally 😊
-- If a product/service is not available, suggest the closest alternative
-- Always guide customer toward making a purchase or booking
-- Never say "I don't know" — instead say you'll find out and ask them to contact directly
-- Be warm, helpful, and professional
+- Reply in the SAME language the customer uses (Sinhala, English, or Singlish)
+- Keep replies catchy, short, and engaging (2-4 sentences max, perfect for WhatsApp)
+- Use emojis naturally 😊✨
+- Always guide the customer towards making a purchase, booking, or taking the next step.
+- Be warm and professional.
 
-BUSINESS KNOWLEDGE BASE:
+BUSINESS KNOWLEDGE BASE & TRAINED DATA:
 ${context}`;
 
   try {
-    // 404 Error එක මඟහරින්න අලුත්ම සහ ස්ථාවර මොඩල්ස් පිළිවෙළට ට්‍රයි කරනවා
-    const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash"];
     let model;
     let result;
     let success = false;
 
     for (const modelName of modelsToTry) {
       try {
-        console.log(`[${shopId}] Trying Gemini model: ${modelName}`);
-        
-        model = genAI.getGenerativeModel({ 
-          model: modelName 
-        });
+        model = genAI.getGenerativeModel({ model: modelName });
 
-        // Prompt එක බිල්ඩ් කරනවා
         let fullPrompt = systemPrompt + "\n\n";
         history.forEach(msg => {
           fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Assistant: ${msg.content}\n`;
@@ -122,25 +121,20 @@ ${context}`;
 
         result = await model.generateContent(fullPrompt);
         success = true;
-        console.log(`[${shopId}] Success with model: ${modelName}`);
-        break; // එක මොඩල් එකක් වැඩ කලොත් Loop එක නවත්වනවා
+        break; 
       } catch (modelErr) {
-        console.error(`Model ${modelName} failed:`, modelErr.message);
+        console.error(`Model ${modelName} failed during creative reply:`, modelErr.message);
       }
     }
 
-    if (!success) {
-      throw new Error("All configured Gemini models failed. Please check Render Env Variable API Key.");
-    }
+    if (!success) return null;
 
     const response = await result.response;
     const reply = response.text();
 
-    // History එකට සේව් කරනවා
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: reply });
 
-    // Keep only last N messages
     if (history.length > MAX_HISTORY * 2) {
       history.splice(0, 2);
     }
@@ -163,7 +157,7 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
   });
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+// ── Main handler (AI First Logic) ─────────────────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
     const { data: shop } = await supabase
@@ -180,30 +174,28 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. Try keyword match first (fast)
-    reply = await keywordMatch(shopId, text);
-    if (reply) {
-      replyType = "keyword";
-      console.log(`[${shopId}] Keyword match found`);
-    }
-
-    // 2. AI fallback
-    if (!reply && process.env.GEMINI_API_KEY) {
+    // පියවර 1: මුලින්ම AI එකට දීලා ක්‍රියේටිව් උත්තරයක් හදනවා (Blending FAQs + Docs)
+    if (process.env.GEMINI_API_KEY) {
       try {
         reply = await aiReply(shopId, senderJid, text);
-        replyType = "ai";
+        if (reply) replyType = "ai";
       } catch (err) {
-        console.error(`[${shopId}] AI reply error:`, err.message);
+        console.error(`[${shopId}] AI reply error, falling back to keywords:`, err.message);
       }
     }
 
-    // 3. Send reply
+    // පියවර 2: මොකක් හරි හේතුවකින් AI එක ෆේල් වුණොත් විතරක් static FAQ එකෙන් උත්තරයක් ගන්නවා
+    if (!reply) {
+      reply = await keywordMatch(shopId, text);
+      if (reply) replyType = "keyword_fallback";
+    }
+
+    // පියවර 3: මැසේජ් එක යවනවා
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
       console.log(`[${shopId}] → Reply sent (${replyType})`);
     }
 
-    // 4. Log to database
     await logMessage(shopId, senderJid, text, reply, replyType);
   } catch (err) {
     console.error(`[${shopId}] handleIncomingMessage error:`, err.message);
