@@ -1,5 +1,5 @@
 /**
- * replyEngine.js — Gemini AI Version (Fixed & Clean)
+ * replyEngine.js — Gemini AI Version (Final Stable)
  * Uses Google Gemini API for smart replies
  */
 
@@ -99,10 +99,10 @@ BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
   try {
-    // Standard Stable Model එක (අලුත් Project එකක් නිසා දැන් මේක කෙලින්ම වැඩ කරනවා)
+    // STABLE FIX: Forced Stable v1 API with full model path to completely avoid 404
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash" 
-    });
+      model: "models/gemini-1.5-flash" 
+    }, { apiVersion: "v1" });
 
     // Build prompt with history
     let fullPrompt = systemPrompt + "\n\n";
@@ -198,4 +198,3 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
 }
 
 module.exports = { handleIncomingMessage };
-
