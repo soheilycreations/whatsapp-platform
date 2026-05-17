@@ -98,11 +98,14 @@ RULES:
 BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
-  try {
-    // FIX: 404 Error eka nathi karanna "models/" kalla athulath kala
+    try {
+    // මේ විදියට දාලා බලන්න. මේකෙන් API එක බලෙන්ම v1 stable version එකට හරවනවා.
     const model = genAI.getGenerativeModel({ 
-      model: "models/gemini-1.5-flash" 
-    });
+      model: "gemini-1.5-flash" 
+    }, { apiVersion: 'v1' }); 
+
+    // ඉතිරි ටික වෙනස් කරන්න එපා...
+
 
     // Build prompt with history
     let fullPrompt = systemPrompt + "\n\n";
