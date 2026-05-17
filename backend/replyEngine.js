@@ -1,13 +1,17 @@
 /**
- * replyEngine.js — Full AI Sales Assistant (Gemini Stable Version)
+ * replyEngine.js — Gemini AI Version (Fixed)
+ * Uses Google Gemini API for smart replies
  */
 
-const { GoogleGenAI } = require("@google/genai");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const supabase = require("./supabaseClient");
 
-// Gemini Client setup
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
+let genAI;
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+}
 
+// Conversation history: Map<senderJid, messages[]>
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
@@ -26,12 +30,14 @@ async function keywordMatch(shopId, text) {
     if (faq.keywords?.some((kw) => lower.includes(kw.toLowerCase()))) {
       return faq.answer;
     }
-    if (lower.includes(faq.question.toLowerCase())) return faq.answer;
+    if (lower.includes(faq.question.toLowerCase())) {
+      return faq.answer;
+    }
   }
   return null;
 }
 
-// ── Build AI context ──────────────────────────────────────────────────────────
+// ── Build context from FAQs + Documents ───────────────────────────────────────
 async function buildContext(shopId) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -45,56 +51,90 @@ async function buildContext(shopId) {
     .eq("shop_id", shopId);
 
   let context = "";
+
   if (faqs && faqs.length > 0) {
-    context += "## FAQ\n" + faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n") + "\n\n";
+    context += "## FAQ / Quick Answers\n";
+    context += faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n");
+    context += "\n\n";
   }
+
   if (docs && docs.length > 0) {
-    context += "## Knowledge Docs\n" + docs.map(doc => `### ${doc.file_name}\n${doc.content.slice(0, 3000)}`).join("\n\n");
+    context += "## Business Knowledge Documents\n";
+    docs.forEach((doc) => {
+      const content = doc.content.slice(0, 3000);
+      context += `### ${doc.file_name}\n${content}\n\n`;
+    });
   }
-  return context || "No knowledge base available.";
+
+  return context || "No knowledge base available yet.";
 }
 
-// ── AI reply with stable Gemini Syntax ─────────────────────────────────────────
+// ── Gemini AI reply ───────────────────────────────────────────────────────────
 async function aiReply(shopId, senderJid, text) {
+  if (!genAI) {
+    console.log("Gemini API key not configured");
+    return null;
+  }
+
   const context = await buildContext(shopId);
 
+  // Get conversation history
   if (!conversationHistory.has(senderJid)) {
     conversationHistory.set(senderJid, []);
   }
   const history = conversationHistory.get(senderJid);
 
-  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant. 
-  - Reply in the SAME language as the customer (Sinhala/English).
-  - Keep it SHORT (2-4 sentences).
-  - Use emojis.
-  - Context: ${context}`;
+  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant for this business. Your job is to help customers, answer questions, suggest products/services, and close sales.
 
-  // Gemini model configuration
-  const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash", // Stable version එක
-    systemInstruction: systemPrompt 
-  });
+RULES:
+- Reply in the SAME language the customer uses (Sinhala, English, etc.)
+- Keep replies SHORT and conversational (2-4 sentences max for WhatsApp)
+- Use emojis naturally 😊
+- If a product/service is not available, suggest the closest alternative
+- Always guide customer toward making a purchase or booking
+- Never say "I don't know" — instead say you'll find out and ask them to contact directly
+- Be warm, helpful, and professional
 
-  // History format එක Gemini වලට ගැලපෙන විදියට සකස් කිරීම
-  const contents = history.map(msg => ({
-    role: msg.role === "assistant" ? "model" : "user",
-    parts: [{ text: msg.content }]
-  }));
+BUSINESS KNOWLEDGE BASE:
+${context}`;
 
-  // අලුත් මැසේජ් එක එකතු කිරීම
-  contents.push({ role: "user", parts: [{ text: text }] });
+  try {
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-1.5-flash-latest"
+    });
 
-  const result = await model.generateContent({ contents });
-  const response = await result.response;
-  const reply = response.text();
+    // Build prompt with history
+    let fullPrompt = systemPrompt + "\n\n";
+    
+    // Add conversation history
+    history.forEach(msg => {
+      if (msg.role === "user") {
+        fullPrompt += `Customer: ${msg.content}\n`;
+      } else {
+        fullPrompt += `Assistant: ${msg.content}\n`;
+      }
+    });
+    
+    // Add current message
+    fullPrompt += `Customer: ${text}\nAssistant:`;
 
-  // History update
-  history.push({ role: "user", content: text });
-  history.push({ role: "assistant", content: reply });
+    const result = await model.generateContent(fullPrompt);
+    const reply = result.response.text();
 
-  if (history.length > MAX_HISTORY * 2) history.splice(0, 2);
+    // Save to history
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: reply });
 
-  return reply;
+    // Keep only last N messages
+    if (history.length > MAX_HISTORY * 2) {
+      history.splice(0, 2);
+    }
+
+    return reply;
+  } catch (err) {
+    console.error("Gemini API error:", err.message);
+    return null;
+  }
 }
 
 // ── Log to Supabase ───────────────────────────────────────────────────────────
@@ -111,23 +151,48 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
 // ── Main handler ──────────────────────────────────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
-    const { data: shop } = await supabase.from("shops").select("auto_reply").eq("id", shopId).single();
-    if (!shop?.auto_reply) return;
+    const { data: shop } = await supabase
+      .from("shops")
+      .select("auto_reply")
+      .eq("id", shopId)
+      .single();
 
-    let reply = await keywordMatch(shopId, text);
-    let replyType = "keyword";
-
-    if (!reply && process.env.GEMINI_API_KEY) {
-      reply = await aiReply(shopId, senderJid, text);
-      replyType = "ai";
+    if (!shop?.auto_reply) {
+      await logMessage(shopId, senderJid, text, null, "none");
+      return;
     }
 
+    let reply = null;
+    let replyType = "none";
+
+    // 1. Try keyword match first (fast)
+    reply = await keywordMatch(shopId, text);
+    if (reply) {
+      replyType = "keyword";
+      console.log(`[${shopId}] Keyword match found`);
+    }
+
+    // 2. AI fallback
+    if (!reply && process.env.GEMINI_API_KEY) {
+      try {
+        reply = await aiReply(shopId, senderJid, text);
+        replyType = "ai";
+        console.log(`[${shopId}] AI reply generated`);
+      } catch (err) {
+        console.error(`[${shopId}] AI reply error:`, err.message);
+      }
+    }
+
+    // 3. Send reply
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
+      console.log(`[${shopId}] → Reply sent (${replyType})`);
     }
+
+    // 4. Log to database
     await logMessage(shopId, senderJid, text, reply, replyType);
   } catch (err) {
-    console.error("Error:", err.message);
+    console.error(`[${shopId}] handleIncomingMessage error:`, err.message);
   }
 }
 
