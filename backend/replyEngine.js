@@ -1,5 +1,5 @@
 /**
- * replyEngine.js — Gemini AI Version (Fixed)
+ * replyEngine.js — Gemini AI Version (Fixed & Clean)
  * Uses Google Gemini API for smart replies
  */
 
@@ -99,8 +99,9 @@ BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
   try {
+    // Standard Stable Model එක (අලුත් Project එකක් නිසා දැන් මේක කෙලින්ම වැඩ කරනවා)
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash-latest"
+      model: "gemini-1.5-flash" 
     });
 
     // Build prompt with history
@@ -119,7 +120,8 @@ ${context}`;
     fullPrompt += `Customer: ${text}\nAssistant:`;
 
     const result = await model.generateContent(fullPrompt);
-    const reply = result.response.text();
+    const response = await result.response;
+    const reply = response.text();
 
     // Save to history
     history.push({ role: "user", content: text });
@@ -132,7 +134,7 @@ ${context}`;
 
     return reply;
   } catch (err) {
-    console.error("Gemini API error:", err.message);
+    console.error("Gemini API error detail:", err);
     return null;
   }
 }
@@ -177,7 +179,6 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       try {
         reply = await aiReply(shopId, senderJid, text);
         replyType = "ai";
-        console.log(`[${shopId}] AI reply generated`);
       } catch (err) {
         console.error(`[${shopId}] AI reply error:`, err.message);
       }
@@ -197,3 +198,4 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
 }
 
 module.exports = { handleIncomingMessage };
+
