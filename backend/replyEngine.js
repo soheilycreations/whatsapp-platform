@@ -1,17 +1,13 @@
 /**
- * replyEngine.js — Gemini AI Version
- * Uses Google Gemini instead of Claude
+ * replyEngine.js — Full AI Sales Assistant (Gemini Stable Version)
  */
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const { GoogleGenAI } = require("@google/genai");
 const supabase = require("./supabaseClient");
 
-let genAI;
-if (process.env.GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-}
+// Gemini Client setup
+const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY);
 
-// Conversation history
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
@@ -35,7 +31,7 @@ async function keywordMatch(shopId, text) {
   return null;
 }
 
-// ── Build context ─────────────────────────────────────────────────────────────
+// ── Build AI context ──────────────────────────────────────────────────────────
 async function buildContext(shopId) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -49,87 +45,56 @@ async function buildContext(shopId) {
     .eq("shop_id", shopId);
 
   let context = "";
-
   if (faqs && faqs.length > 0) {
-    context += "## FAQ / Quick Answers\n";
-    context += faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n");
-    context += "\n\n";
+    context += "## FAQ\n" + faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n") + "\n\n";
   }
-
   if (docs && docs.length > 0) {
-    context += "## Business Knowledge Documents\n";
-    docs.forEach((doc) => {
-      const content = doc.content.slice(0, 3000);
-      context += `### ${doc.file_name}\n${content}\n\n`;
-    });
+    context += "## Knowledge Docs\n" + docs.map(doc => `### ${doc.file_name}\n${doc.content.slice(0, 3000)}`).join("\n\n");
   }
-
-  return context || "No knowledge base available yet.";
+  return context || "No knowledge base available.";
 }
 
-// ── Gemini AI reply ───────────────────────────────────────────────────────────
+// ── AI reply with stable Gemini Syntax ─────────────────────────────────────────
 async function aiReply(shopId, senderJid, text) {
-  if (!genAI) {
-    console.log("Gemini API key not configured");
-    return null;
-  }
-
   const context = await buildContext(shopId);
 
-  // Get conversation history
   if (!conversationHistory.has(senderJid)) {
     conversationHistory.set(senderJid, []);
   }
   const history = conversationHistory.get(senderJid);
 
-  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant for this business. Your job is to help customers, answer questions, suggest products/services, and close sales.
+  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant. 
+  - Reply in the SAME language as the customer (Sinhala/English).
+  - Keep it SHORT (2-4 sentences).
+  - Use emojis.
+  - Context: ${context}`;
 
-RULES:
-- Reply in the SAME language the customer uses (Sinhala, English, etc.)
-- Keep replies SHORT and conversational (2-4 sentences max for WhatsApp)
-- Use emojis naturally 😊
-- If a product/service is not available, suggest the closest alternative
-- Always guide customer toward making a purchase or booking
-- Never say "I don't know" — instead say you'll find out and ask them to contact directly
-- Be warm, helpful, and professional
+  // Gemini model configuration
+  const model = genAI.getGenerativeModel({ 
+    model: "gemini-1.5-flash", // Stable version එක
+    systemInstruction: systemPrompt 
+  });
 
-BUSINESS KNOWLEDGE BASE:
-${context}`;
-
-  // Build chat history for Gemini
-  const chatHistory = history.map(msg => ({
-    role: msg.role === "user" ? "user" : "model",
+  // History format එක Gemini වලට ගැලපෙන විදියට සකස් කිරීම
+  const contents = history.map(msg => ({
+    role: msg.role === "assistant" ? "model" : "user",
     parts: [{ text: msg.content }]
   }));
 
-  try {
-    const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-    
-    const chat = model.startChat({
-      history: chatHistory,
-      generationConfig: {
-        maxOutputTokens: 400,
-        temperature: 0.7,
-      },
-    });
+  // අලුත් මැසේජ් එක එකතු කිරීම
+  contents.push({ role: "user", parts: [{ text: text }] });
 
-    const result = await chat.sendMessage(systemPrompt + "\n\nCustomer: " + text);
-    const reply = result.response.text();
+  const result = await model.generateContent({ contents });
+  const response = await result.response;
+  const reply = response.text();
 
-    // Save to history
-    history.push({ role: "user", content: text });
-    history.push({ role: "assistant", content: reply });
+  // History update
+  history.push({ role: "user", content: text });
+  history.push({ role: "assistant", content: reply });
 
-    // Keep only last N messages
-    if (history.length > MAX_HISTORY * 2) {
-      history.splice(0, 2);
-    }
+  if (history.length > MAX_HISTORY * 2) history.splice(0, 2);
 
-    return reply;
-  } catch (err) {
-    console.error("Gemini API error:", err.message);
-    return null;
-  }
+  return reply;
 }
 
 // ── Log to Supabase ───────────────────────────────────────────────────────────
@@ -146,45 +111,23 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
 // ── Main handler ──────────────────────────────────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
-    const { data: shop } = await supabase
-      .from("shops")
-      .select("auto_reply")
-      .eq("id", shopId)
-      .single();
+    const { data: shop } = await supabase.from("shops").select("auto_reply").eq("id", shopId).single();
+    if (!shop?.auto_reply) return;
 
-    if (!shop?.auto_reply) {
-      await logMessage(shopId, senderJid, text, null, "none");
-      return;
-    }
+    let reply = await keywordMatch(shopId, text);
+    let replyType = "keyword";
 
-    let reply = null;
-    let replyType = "none";
-
-    // 1. Keyword match
-    reply = await keywordMatch(shopId, text);
-    if (reply) {
-      replyType = "keyword";
-    }
-
-    // 2. AI fallback
     if (!reply && process.env.GEMINI_API_KEY) {
-      try {
-        reply = await aiReply(shopId, senderJid, text);
-        replyType = "ai";
-      } catch (err) {
-        console.error(`[${shopId}] AI reply error:`, err.message);
-      }
+      reply = await aiReply(shopId, senderJid, text);
+      replyType = "ai";
     }
 
-    // 3. Send reply
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
-      console.log(`[${shopId}] → Reply sent (${replyType})`);
     }
-
     await logMessage(shopId, senderJid, text, reply, replyType);
   } catch (err) {
-    console.error(`[${shopId}] handleIncomingMessage error:`, err.message);
+    console.error("Error:", err.message);
   }
 }
 
