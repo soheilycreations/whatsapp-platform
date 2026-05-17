@@ -99,13 +99,9 @@ BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
   try {
-    // මේක තමයි standard සහ නිවැරදිම ක්‍රමය
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash" 
+      model: "gemini-1.5-flash-latest"
     });
-
-    // ඉතිරි ටික වෙනස් කරන්න එපා...
-
 
     // Build prompt with history
     let fullPrompt = systemPrompt + "\n\n";
@@ -123,8 +119,7 @@ ${context}`;
     fullPrompt += `Customer: ${text}\nAssistant:`;
 
     const result = await model.generateContent(fullPrompt);
-    const response = await result.response;
-    const reply = response.text();
+    const reply = result.response.text();
 
     // Save to history
     history.push({ role: "user", content: text });
@@ -137,7 +132,7 @@ ${context}`;
 
     return reply;
   } catch (err) {
-    console.error("Gemini API error detail:", err);
+    console.error("Gemini API error:", err.message);
     return null;
   }
 }
@@ -182,6 +177,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       try {
         reply = await aiReply(shopId, senderJid, text);
         replyType = "ai";
+        console.log(`[${shopId}] AI reply generated`);
       } catch (err) {
         console.error(`[${shopId}] AI reply error:`, err.message);
       }
