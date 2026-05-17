@@ -1,6 +1,6 @@
 /**
- * replyEngine.js — Gemini AI Version (Final Stable)
- * Uses Google Gemini API for smart replies
+ * replyEngine.js — Gemini AI Version (Multi-Model Auto Fallback)
+ * Uses Google Gemini API for smart replies with 2.5/2.0 support
  */
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -99,31 +99,44 @@ BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
   try {
-    // STABLE FIX: Forced Stable v1 API with full model path to completely avoid 404
-    const model = genAI.getGenerativeModel({ 
-      model: "models/gemini-1.5-flash" 
-    }, { apiVersion: "v1" });
+    // 404 Error එක මඟහරින්න අලුත්ම සහ ස්ථාවර මොඩල්ස් පිළිවෙළට ට්‍රයි කරනවා
+    const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    let model;
+    let result;
+    let success = false;
 
-    // Build prompt with history
-    let fullPrompt = systemPrompt + "\n\n";
-    
-    // Add conversation history
-    history.forEach(msg => {
-      if (msg.role === "user") {
-        fullPrompt += `Customer: ${msg.content}\n`;
-      } else {
-        fullPrompt += `Assistant: ${msg.content}\n`;
+    for (const modelName of modelsToTry) {
+      try {
+        console.log(`[${shopId}] Trying Gemini model: ${modelName}`);
+        
+        model = genAI.getGenerativeModel({ 
+          model: modelName 
+        });
+
+        // Prompt එක බිල්ඩ් කරනවා
+        let fullPrompt = systemPrompt + "\n\n";
+        history.forEach(msg => {
+          fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Assistant: ${msg.content}\n`;
+        });
+        fullPrompt += `Customer: ${text}\nAssistant:`;
+
+        result = await model.generateContent(fullPrompt);
+        success = true;
+        console.log(`[${shopId}] Success with model: ${modelName}`);
+        break; // එක මොඩල් එකක් වැඩ කලොත් Loop එක නවත්වනවා
+      } catch (modelErr) {
+        console.error(`Model ${modelName} failed:`, modelErr.message);
       }
-    });
-    
-    // Add current message
-    fullPrompt += `Customer: ${text}\nAssistant:`;
+    }
 
-    const result = await model.generateContent(fullPrompt);
+    if (!success) {
+      throw new Error("All configured Gemini models failed. Please check Render Env Variable API Key.");
+    }
+
     const response = await result.response;
     const reply = response.text();
 
-    // Save to history
+    // History එකට සේව් කරනවා
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: reply });
 
