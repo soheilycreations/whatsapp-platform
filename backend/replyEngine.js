@@ -98,11 +98,11 @@ RULES:
 BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
-    try {
-    // මේ විදියට දාලා බලන්න. මේකෙන් API එක බලෙන්ම v1 stable version එකට හරවනවා.
+  try {
+    // මේක තමයි standard සහ නිවැරදිම ක්‍රමය
     const model = genAI.getGenerativeModel({ 
       model: "gemini-1.5-flash" 
-    }, { apiVersion: 'v1' }); 
+    });
 
     // ඉතිරි ටික වෙනස් කරන්න එපා...
 
