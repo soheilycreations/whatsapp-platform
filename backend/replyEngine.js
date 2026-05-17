@@ -99,9 +99,9 @@ BUSINESS KNOWLEDGE BASE:
 ${context}`;
 
   try {
-    // FIX: Latest preview version eka nathiwa stable model name eka use kala
+    // FIX: 404 Error eka nathi karanna "models/" kalla athulath kala
     const model = genAI.getGenerativeModel({ 
-      model: "gemini-1.5-flash" 
+      model: "models/gemini-1.5-flash" 
     });
 
     // Build prompt with history
@@ -119,7 +119,6 @@ ${context}`;
     // Add current message
     fullPrompt += `Customer: ${text}\nAssistant:`;
 
-    // FIX: GenerateContent ekata hariyata prompt eka pass kala
     const result = await model.generateContent(fullPrompt);
     const response = await result.response;
     const reply = response.text();
