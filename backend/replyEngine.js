@@ -1,6 +1,6 @@
 /**
- * replyEngine.js — Gemini AI Version (Creative AI First with Resilient Fallback)
- * Prioritizes Gemini AI, but safely falls back to keywords if API Quota (429) hits.
+ * replyEngine.js — Resilient & Creative AI Model (Strict Keywords + Closing Fallback)
+ * Prioritizes Gemini AI with strict regex matching and elegant failure fallback.
  */
 
 const { GoogleGenerativeAI } = require("@google/generative-ai");
@@ -14,7 +14,7 @@ if (process.env.GEMINI_API_KEY) {
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
-// ── Keyword match (Used as standard fallback) ───────────────────────────────
+// ── Keyword match (Strict exact word matching via RegEx) ─────────────────────
 async function keywordMatch(shopId, text) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -24,16 +24,27 @@ async function keywordMatch(shopId, text) {
 
   if (!faqs || faqs.length === 0) return null;
 
-  const lower = text.toLowerCase();
+  const lowerText = text.toLowerCase();
+  
   for (const faq of faqs) {
-    if (faq.keywords?.some((kw) => lower.includes(kw.toLowerCase()))) {
-      return faq.answer;
-    }
-    if (lower.includes(faq.question.toLowerCase())) {
-      return faq.answer;
+    if (faq.keywords && faq.keywords.length > 0) {
+      for (const kw of faq.keywords) {
+        const lowerKw = kw.toLowerCase();
+        
+        // වාක්‍යයක් මැද කෑල්ලක් මැච් වෙන්නේ නැතුව, තනි වචනයක් හෝ phrase එකක් විදියටම තිබ්බොත් විතරක් අල්ලනවා
+        const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
+        
+        if (regex.test(lowerText) || lowerText === lowerKw) {
+          return faq.answer;
+        }
+      }
     }
   }
   return null;
+}
+
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ── Build context from FAQs + Documents ───────────────────────────────────────
@@ -99,7 +110,6 @@ RULES:
 BUSINESS KNOWLEDGE BASE & TRAINED DATA:
 ${context}`;
 
-  // 429 errors මඟහරින්න 1.5-flash එකත් අන්තිමට තියෙන්න ඇරියා ට්‍රැෆික් වැඩි වෙලාවට
   const modelsToTry = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
   let model;
   let result;
@@ -120,13 +130,10 @@ ${context}`;
       break; 
     } catch (modelErr) {
       console.error(`Model ${modelName} failed during creative reply:`, modelErr.message);
-      // මෙතනදී Error එක 429 (Quota) නම් ඊළඟ මොඩල් එකට යන්න ඉඩ දෙනවා
     }
   }
 
-  if (!success) {
-    return null; // AI එක සම්පූර්ණයෙන්ම ෆේල් වුණොත් null යවනවා handleIncomingMessage එකට fallback වෙන්න
-  }
+  if (!success) return null;
 
   const response = await result.response;
   const reply = response.text();
@@ -152,7 +159,7 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
   });
 }
 
-// ── Main handler (Resilient AI First Logic) ───────────────────────────────────
+// ── Main handler ──────────────────────────────────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
     const { data: shop } = await supabase
@@ -169,7 +176,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // පියවර 1: AI එකෙන් උත්තරයක් ගන්න බලනවා
+    // පියවර 1: මුලින්ම AI එකෙන් උත්තරයක් ගන්න බලනවා
     if (process.env.GEMINI_API_KEY) {
       try {
         reply = await aiReply(shopId, senderJid, text);
@@ -179,21 +186,21 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       }
     }
 
-    // පියවර 2: Gemini Quota Exceed වුණොත් හෝ වෙනත් අවුලකින් AI null වුණොත්,
-    // සිස්ටම් එක ගොළු වෙන්න නොදී කෙලින්ම Keyword Match එකෙන් උත්තරයක් හොයනවා.
+    // පියවර 2: Gemini ලිමිට් පැන්නොත් (Null ආවොත්), Strict Keyword Match එක චෙක් කරනවා
     if (!reply) {
-      console.log(`[${shopId}] AI failed or hit limits. Falling back to Keyword Matching...`);
+      console.log(`[${shopId}] AI unavailable. Trying strict keyword matching...`);
       reply = await keywordMatch(shopId, text);
-      if (reply) {
-        replyType = "keyword_fallback";
-      } else {
-        // Keyword එකකුත් නැත්නම් default fallback මැසේජ් එකක් දෙනවා බොට් නැවතීම පේන්න නොදී
-        reply = "ඔබගේ පණිවිඩයට ස්තූතියි! අපගේ නියෝජිතයෙකු ළඟදීම ඔබව සම්බන්ධ කරගනු ඇත. 😊";
-        replyType = "default_fallback";
-      }
+      if (reply) replyType = "keyword_fallback";
     }
 
-    // පියවර 3: මැසේජ් එක යවනවා
+    // පියවර 3: Keyword එකකුත් නැත්නම්, ලස්සන ක්ලෝසින් මැසේජ් එකක් දීලා ඉවර කරනවා
+    if (!reply) {
+      console.log(`[${shopId}] Both AI and Keywords failed. Sending closing fallback...`);
+      reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ AI පද්ධතිය කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
+      replyType = "closing_fallback";
+    }
+
+    // පියවර 4: මැසේජ් එක යවනවා
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
       console.log(`[${shopId}] → Reply sent (${replyType})`);
