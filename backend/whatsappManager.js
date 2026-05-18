@@ -1,100 +1,34 @@
 /**
- * whatsappManager.js — Database Backed Auth (Supabase Session Sync)
- * Fixes Render server restarts causing WhatsApp logouts.
+ * whatsappManager.js — updated with replyEngine integration
  */
 
 const {
   default: makeWASocket,
+  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   isJidBroadcast,
-  initAuthCreds,
-  BufferJSON
 } = require("@whiskeysockets/baileys");
 
 const pino = require("pino");
-const supabase = require("./supabaseClient");
+const path = require("path");
+const fs = require("fs");
 const { handleIncomingMessage } = require("./replyEngine");
 
 const logger = pino({ level: "silent" });
 const sessions = new Map();
 
-// ── Custom Database Auth State Handling ─────────────────────────────────────
-async function useDatabaseAuthState(shopId) {
-  // 1. Database එකෙන් පරණ සෙෂන් දත්ත තියෙනවද බලනවා
-  const { data } = await supabase
-    .from("whatsapp_sessions")
-    .select("session_data")
-    .eq("shop_id", shopId)
-    .single();
-
-  let creds;
-  let keys = {};
-
-  if (data?.session_data) {
-    try {
-      const parsed = JSON.parse(data.session_data, BufferJSON.reviver);
-      creds = parsed.creds;
-      keys = parsed.keys || {};
-    } catch (e) {
-      console.error(`[${shopId}] Error parsing session data, resetting...`);
-      creds = initAuthCreds();
-    }
-  } else {
-    creds = initAuthCreds();
-  }
-
-  // සෙෂන් දත්ත ඩේටාබේස් එකට සේව් කරන custom function එක
-  const saveState = async () => {
-    const sessionDataStr = JSON.stringify({ creds, keys }, BufferJSON.replacer);
-    await supabase.from("whatsapp_sessions").upsert({
-      shop_id: shopId,
-      session_data: sessionDataStr,
-      updated_at: new Date().toISOString()
-    });
-  };
-
-  return {
-    state: {
-      creds,
-      keys: {
-        get: (type, ids) => {
-          const res = {};
-          for (const id of ids) {
-            if (keys[type]?.[id]) {
-              res[id] = keys[type][id];
-            }
-          }
-          return res;
-        },
-        set: (data) => {
-          for (const type in data) {
-            if (!keys[type]) keys[type] = {};
-            for (const id in data[type]) {
-              if (data[type][id] === null) {
-                delete keys[type][id];
-              } else {
-                keys[type][id] = data[type][id];
-              }
-            }
-          }
-          saveState(); // මොනවා හරි කී එකක් අප්ඩේට් වුණොත් DB එකට සේව් කරනවා
-        }
-      }
-    },
-    saveCreds: async () => {
-      await saveState(); // Creds අප්ඩේට් වුණොත් DB එකට සේව් කරනවා
-    }
-  };
+function authPath(shopId) {
+  const dir = path.resolve(__dirname, "sessions", shopId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
 }
 
-// ── Create Session ──────────────────────────────────────────────────────────
 async function createSession(shopId, clientSocket) {
   await destroySession(shopId);
 
-  // ඩේටාබේස් එකෙන් Auth State එක ලෝඩ් කරගන්නවා
-  const { state, saveCreds } = await useDatabaseAuthState(shopId);
+  const { state, saveCreds } = await useMultiFileAuthState(authPath(shopId));
   const { version } = await fetchLatestBaileysVersion();
 
   const waSocket = makeWASocket({
@@ -115,32 +49,38 @@ async function createSession(shopId, clientSocket) {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
+      console.log(`[${shopId}] QR code received — forwarding to client`);
       clientSocket.emit("qr", { qr });
       clientSocket.emit("status", { status: "connecting" });
     }
 
     if (connection === "open") {
-      console.log(`[${shopId}] WhatsApp connected ✓ (Synced to DB)`);
+      console.log(`[${shopId}] WhatsApp connected ✓`);
       clientSocket.emit("status", { status: "connected" });
     }
 
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+      console.log(
+        `[${shopId}] Connection closed. Code: ${statusCode}. Reconnect: ${shouldReconnect}`
+      );
+
       clientSocket.emit("status", { status: "disconnected" });
 
       if (shouldReconnect) {
-        console.log(`[${shopId}] Connection lost. Reconnecting in 3s...`);
+        console.log(`[${shopId}] Attempting reconnection in 3s…`);
         setTimeout(() => createSession(shopId, clientSocket), 3000);
       } else {
-        console.log(`[${shopId}] Logged out by user. Clearing database session...`);
+        console.log(`[${shopId}] Logged out — clearing auth state`);
         sessions.delete(shopId);
-        await supabase.from("whatsapp_sessions").delete().eq("shop_id", shopId);
+        fs.rmSync(authPath(shopId), { recursive: true, force: true });
       }
     }
   });
 
-  // ── Incoming messages ─────────────────────────────────────────────────────
+  // ── Incoming messages → replyEngine ────────────────────────────────────────
   waSocket.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
@@ -148,6 +88,19 @@ async function createSession(shopId, clientSocket) {
       if (!msg.message || msg.key.fromMe) continue;
 
       const senderJid = msg.key.remoteJid;
+      
+      // 🛑 Ignore group messages
+      if (senderJid.endsWith('@g.us')) {
+        console.log(`[${shopId}] Ignoring group message from ${senderJid}`);
+        continue;
+      }
+      
+      // 🛑 Ignore broadcast/newsletter messages
+      if (senderJid.includes('@newsletter') || senderJid.includes('@broadcast')) {
+        console.log(`[${shopId}] Ignoring broadcast message`);
+        continue;
+      }
+
       const text =
         msg.message?.conversation ||
         msg.message?.extendedTextMessage?.text ||
@@ -173,9 +126,15 @@ async function createSession(shopId, clientSocket) {
 
 async function destroySession(shopId) {
   if (!sessions.has(shopId)) return;
+
   const { cleanup } = sessions.get(shopId);
-  try { cleanup(); } catch (_) {}
+  try {
+    cleanup();
+  } catch (_) {
+    // Ignore errors during teardown
+  }
   sessions.delete(shopId);
+  console.log(`[${shopId}] Session destroyed`);
 }
 
 function hasSession(shopId) {
