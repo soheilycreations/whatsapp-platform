@@ -15,28 +15,48 @@ const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
 // ── Keyword match (Strict exact word matching via RegEx) ─────────────────────
-async function keywordMatch(shopId, text) {
-  const { data: faqs } = await supabase
-    .from("faqs")
-    .select("*")
-    .eq("shop_id", shopId)
-    .eq("is_active", true);
+async function aiReply(shopId, senderJid, text) {
+  if (!genAI) return null;
 
-  if (!faqs || faqs.length === 0) return null;
+  const context = await buildContext(shopId);
+  if (!conversationHistory.has(senderJid)) conversationHistory.set(senderJid, []);
+  const history = conversationHistory.get(senderJid);
 
-  const lowerText = text.toLowerCase();
-  
-  for (const faq of faqs) {
-    if (faq.keywords && faq.keywords.length > 0) {
-      for (const kw of faq.keywords) {
-        const lowerKw = kw.toLowerCase();
-        const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
-        
-        if (regex.test(lowerText) || lowerText === lowerKw) {
-          return faq.answer;
-        }
-      }
+  const systemPrompt = `You are a smart, creative, and friendly WhatsApp sales assistant. Use the knowledge base to answer. Knowledge: ${context}`;
+
+  // මෙතන Stable version names පාවිච්චි කරමු
+  const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-flash-8b"];
+  let reply = null;
+
+  for (const modelName of modelsToTry) {
+    try {
+      // 404 එක fix කරන්න models/ කෑල්ල එකතු කරනවා
+      const model = genAI.getGenerativeModel({ 
+        model: `models/${modelName}`, 
+        systemInstruction: systemPrompt 
+      });
+
+      const chat = model.startChat({
+        history: history.map(msg => ({
+          role: msg.role === "user" ? "user" : "model",
+          parts: [{ text: msg.content }],
+        })),
+      });
+
+      const result = await chat.sendMessage(text);
+      reply = result.response.text();
+      
+      if (reply) break; 
+    } catch (modelErr) {
+      console.error(`[${shopId}] Model ${modelName} error:`, modelErr.message);
     }
+  }
+
+  if (reply) {
+    history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: reply });
+    if (history.length > MAX_HISTORY * 2) history.splice(0, 2);
+    return reply;
   }
   return null;
 }
