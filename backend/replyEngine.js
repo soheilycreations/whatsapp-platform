@@ -107,7 +107,8 @@ ${context}`;
 
     console.log(`[${shopId}] Calling Official Gemini Chat API for: ${text}...`);
 
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    // Model Fallback Array (නිවැරදි නම් වලට අප්ඩේට් කරා)
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash-latest"];
     let replyText = null;
 
     const formattedHistory = history.map(msg => ({
