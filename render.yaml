@@ -1,0 +1,20 @@
+# Exported from Render on 2026-05-20T17:39:25Z
+version: "1"
+projects:
+- name: whatsapp-bot
+  environments:
+  - name: Production
+    services:
+    - type: web
+      name: whatsapp-bot-frontend
+      runtime: node
+      repo: https://github.com/soheilycreations/whatsapp-platform
+      plan: free
+      envVars:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        sync: false
+      region: singapore
+      buildCommand: npm install && npm run build
+      startCommand: npm start
+      autoDeployTrigger: "off"
+      rootDir: frontend
