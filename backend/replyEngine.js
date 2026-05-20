@@ -1,16 +1,12 @@
 /**
  * replyEngine.js
- * Native Gemini AI Integration + Strict Regex Fallbacks (No External Axios Needed)
+ * Uses Soheily Creations AI API (With Safe History Management & Smart FAQ Fallback)
  */
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
+const axios = require("axios");
 const supabase = require("./supabaseClient");
 
-let genAI;
-if (process.env.GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-}
-
+const AI_API_URL = process.env.AI_API_URL || "http://localhost:5000/api/ai";
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
@@ -25,11 +21,15 @@ async function keywordMatch(shopId, text) {
   if (!faqs || faqs.length === 0) return null;
 
   const lowerText = text.toLowerCase();
+  
   for (const faq of faqs) {
     if (faq.keywords && faq.keywords.length > 0) {
       for (const kw of faq.keywords) {
         const lowerKw = kw.toLowerCase();
+        
+        // තනි වචනයක් හෝ phrase එකක් විදියටම තිබ්බොත් විතරක් අල්ලනවා
         const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
+        
         if (regex.test(lowerText) || lowerText === lowerKw) {
           return faq.answer;
         }
@@ -57,23 +57,24 @@ async function buildContext(shopId) {
     .eq("shop_id", shopId);
 
   let context = "";
+
   if (faqs && faqs.length > 0) {
-    context += "## FAQ Reference:\n" + faqs.map((f) => `Q: ${f.question} -> A: ${f.answer}`).join("\n");
+    context += "FAQ: " + faqs.map((f) => `${f.question} - ${f.answer}`).join(" | ");
   }
+
   if (docs && docs.length > 0) {
-    context += "\n\n## Business Documents:\n";
-    docs.forEach((doc) => { context += `${doc.content.slice(0, 1500)} `; });
+    let docContent = "";
+    docs.forEach((doc) => {
+      docContent += doc.content.slice(0, 1500) + " ";
+    });
+    context += " DOCUMENTS: " + docContent;
   }
-  return context;
+
+  return context.slice(0, 2000);
 }
 
-// ── Direct Native Gemini AI Reply ─────────────────────────────────────────────
+// ── AI reply via Soheily API ───────────────────────────────────────────────────
 async function aiReply(shopId, senderJid, text) {
-  if (!genAI) {
-    console.error(`[${shopId}] Gemini API Key missing in environment variables`);
-    return null;
-  }
-
   try {
     const context = await buildContext(shopId);
 
@@ -82,49 +83,42 @@ async function aiReply(shopId, senderJid, text) {
     }
     const history = conversationHistory.get(senderJid);
 
-    const systemPrompt = `You are a smart, friendly, and helpful WhatsApp sales assistant for "Soheily Creations". 
-Use the following FAQ and context to answer user questions nicely in a catchy way.
-Reply in the SAME language the customer uses (Sinhala, English, or Singlish). Keep it brief (2-3 sentences max).
+    console.log(`[${shopId}] Calling AI API for: ${text.substring(0, 50)}...`);
 
-CONTEXT:
-${context}`;
+    // 💡 FIX: API එක සාර්ථක වුණොත් විතරක් හිස්ට්‍රි එකට දාන්න තාවකාලික array එකක් හදනවා
+    const tempHistory = [...history, { role: "user", content: text }];
 
-    console.log(`[${shopId}] Calling Native Gemini API for: ${text.substring(0, 50)}...`);
+    const response = await axios.post(
+      `${AI_API_URL}/generate`,
+      {
+        text: text,
+        context: context,
+        history: tempHistory.slice(-4), // සේෆ් හිස්ට්‍රි එක යවනවා
+      },
+      { timeout: 15000 }
+    );
 
-    // Resilient model fallback
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
-    let responseText = null;
+    const reply = response.data?.reply;
 
-    for (const modelName of models) {
-      try {
-        const model = genAI.getGenerativeModel({ model: modelName });
-        
-        let fullPrompt = `${systemPrompt}\n\n`;
-        history.slice(-4).forEach(msg => {
-          fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Bot: ${msg.content}\n`;
-        });
-        fullPrompt += `Customer: ${text}\nBot:`;
-
-        const result = await model.generateContent(fullPrompt);
-        responseText = result.response.text();
-        if (responseText) break;
-      } catch (err) {
-        console.error(`[${shopId}] Model ${modelName} failed, trying next...`);
-      }
+    if (!reply) {
+      console.log(`[${shopId}] AI returned empty reply`);
+      return null;
     }
 
-    if (!responseText) return null;
-
+    // API එක 100% ක් සක්සස් නම් විතරක් ඇත්තම හිස්ට්‍රි එකට push කරනවා (Roles මාරුවෙන් මාරුවට රැකෙනවා)
     history.push({ role: "user", content: text });
-    history.push({ role: "assistant", content: responseText });
+    history.push({ role: "assistant", content: reply });
 
-    if (history.length > MAX_HISTORY * 2) history.splice(0, 2);
+    if (history.length > MAX_HISTORY * 2) {
+      history.splice(0, 2);
+    }
 
-    console.log(`[${shopId}] Gemini reply success!`);
-    return responseText;
+    console.log(`[${shopId}] AI reply success!`);
+    return reply;
   } catch (err) {
-    console.error(`[${shopId}] Native AI Error:`, err.message);
-    return null;
+    const errorDetails = err.response ? JSON.stringify(err.response.data) : err.message;
+    console.error(`[${shopId}] AI API error details:`, errorDetails);
+    return null; // AI ෆේල් වුණොත් null දීලා ඊළඟ පියවරට බාර දෙනවා
   }
 }
 
@@ -139,7 +133,7 @@ async function logMessage(shopId, senderJid, messageText, replySent, replyType) 
   });
 }
 
-// ── Main handler ──────────────────────────────────────────────────────────────
+// ── Main handler (Smart Logic Flow) ──────────────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
     const { data: shop } = await supabase
@@ -156,32 +150,34 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. Try AI First
+    // 1. මුලින්ම AI එකෙන් උත්තරයක් ගන්න ට්‍රයි කරනවා (Creative First)
     reply = await aiReply(shopId, senderJid, text);
     if (reply) replyType = "ai";
 
-    // 2. Keyword Fallback if AI fails
+    // 2. 💡 ඔයා ඉල්ලපු දේ: AI ෆේල් වුණොත් (හෝ කාර්යබහුල වුණොත්), බිසී කියලා කියන්නේ නැතුව FAQ වල තියෙනවද බලනවා
     if (!reply) {
-      console.log(`[${shopId}] AI failed. Trying strict keyword matching...`);
+      console.log(`[${shopId}] AI failed/busy. Instantly checking FAQ database fallback...`);
       reply = await keywordMatch(shopId, text);
-      if (reply) replyType = "keyword_fallback";
+      if (reply) replyType = "faq_fallback";
     }
 
-    // 3. Final Closing Fallback
+    // 3. AI එකයි, FAQ ඩේටාබේස් එකයි දෙකම ඇතුළේ උත්තරයක් නැත්නම් විතරක් "Busy" මැසේජ් එක දෙනවා
     if (!reply) {
-      console.log(`[${shopId}] Sending closing fallback...`);
+      console.log(`[${shopId}] No FAQ match found either. Sending final closing fallback...`);
       reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ AI පද්ධතිය කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
       replyType = "closing_fallback";
     }
 
+    // 4. මැසේජ් එක යැවීම
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
-      console.log(`[${shopId}] → Sent (${replyType})`);
+      console.log(`[${shopId}] → Sent Response (${replyType})`);
     }
 
+    // 5. Log කිරීම
     await logMessage(shopId, senderJid, text, reply, replyType);
   } catch (err) {
-    console.error(`[${shopId}] Error:`, err.message);
+    console.error(`[${shopId}] Top level error:`, err.message);
   }
 }
 
