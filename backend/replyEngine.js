@@ -33,7 +33,7 @@ async function keywordMatch(shopId, text) {
       for (const kw of faq.keywords) {
         const lowerKw = kw.toLowerCase();
         
-        // Exact keyword එකක්ද කියලා RegEx එකෙන් බලනවා (වචන මැද තියෙන කෑලි පැටලෙන්නේ නැති වෙන්න)
+        // Exact keyword එකක්ද කියලා RegEx එකෙන් බලනවා
         const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
         
         if (regex.test(lowerText) || lowerText === lowerKw) {
@@ -98,7 +98,7 @@ Strict Rules for Greeting:
 
 Response Style:
 - If the question is about pricing, WhatsApp bots, websites, or POS, give precise details based on context.
-- Keep answers short, natural, and professional (Max 2-3 sentences).
+- Keep answers informative but concise (Max 3-4 sentences).
 - Reply in the EXACT same language the user writes (If they write in Singlish, reply in Singlish/Sinhala. If Sinhala, reply in Sinhala).
 - ALWAYS rely on the context data below to provide accurate answers.
 
@@ -107,11 +107,9 @@ ${context}`;
 
     console.log(`[${shopId}] Calling Official Gemini Chat API for: ${text}...`);
 
-    // Model Fallback Array (එකක් බැරි වුණොත් අනෙක)
     const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
     let replyText = null;
 
-    // Gemini නිල Chat API එකට ගැලපෙන විදියට හිස්ට්‍රි Format එක සකස් කරගන්නවා (user -> model)
     const formattedHistory = history.map(msg => ({
       role: msg.role === "assistant" ? "model" : "user",
       parts: [{ text: msg.content }]
@@ -121,19 +119,19 @@ ${context}`;
       try {
         const model = genAI.getGenerativeModel({ 
           model: modelName,
-          systemInstruction: systemPrompt // System instruction එක නිල විදියටම දෙනවා
+          systemInstruction: systemPrompt
         });
         
-        // නිල SDK Chat Session එකක් ආරම්භ කිරීම (History එක ස්ටේබල්ව තියාගන්න)
+        // 💡 FIX DONE: maxOutputTokens 1000 දක්වා වැඩි කරා බාගෙට කැපෙන එක නවත්වන්න
         const chat = model.startChat({
           history: formattedHistory,
-          generationConfig: { maxOutputTokens: 250 }
+          generationConfig: { maxOutputTokens: 1000 } 
         });
 
         const result = await chat.sendMessage(text);
         replyText = result.response.text();
         
-        if (replyText) break; // සාර්ථකව රිප්ලයි එකක් ආවොත් ලූප් එක නවත්වනවා
+        if (replyText) break;
       } catch (e) {
         console.error(`[${shopId}] Model ${modelName} chat session failed:`, e.message);
       }
@@ -141,7 +139,6 @@ ${context}`;
 
     if (!replyText) return null;
 
-    // වැඩේ සාර්ථක නම් විතරක් අපේ local history එකට push කරනවා
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: replyText });
 
@@ -157,7 +154,7 @@ ${context}`;
 // ── Main handler (FAQ First, Then AI Fallback) ──────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
-    // 🚨 💡 FIX: ගෲප් මැසේජ් එකක් නම් මෙතනින්ම නවත්වන්න (Do not reply to groups)
+    // ගෲප් මැසේජ් බ්ලොක් එක
     if (senderJid && senderJid.endsWith("@g.us")) {
       console.log(`[${shopId}] Ignored group message from: ${senderJid}`);
       return; 
@@ -174,7 +171,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. පළවෙනි පියවර: මුලින්ම FAQ / Keywords චෙක් කරනවා
+    // 1. මුලින්ම FAQ / Keywords චෙක් කිරීම
     reply = await keywordMatch(shopId, text);
     if (reply) {
       replyType = "database_faq";
@@ -186,7 +183,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       hist.push({ role: "assistant", content: reply });
     }
 
-    // 2. දෙවැනි පියවර: FAQ එකේ නැත්නම් විතරක් Gemini AI එකට දෙනවා
+    // 2. FAQ එකේ නැත්නම් Gemini AI එකට දීම
     if (!reply) {
       reply = await aiReply(shopId, senderJid, text);
       if (reply) {
@@ -195,7 +192,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       }
     }
 
-    // 3. තුන්වැනි පියවර: දෙකම නැත්නම් විතරක් "Busy" මැසේජ් එක දෙනවා
+    // 3. Falling back
     if (!reply) {
       console.log(`[${shopId}] Both FAQ and AI unavailable. Sending closing fallback...`);
       reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ පද්ධතිය තරමක් කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
@@ -206,7 +203,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     await waSocket.sendMessage(senderJid, { text: reply });
     console.log(`[${shopId}] → Sent (${replyType})`);
 
-    // Supabase එකට මැසේජ් එක සේව් කිරීම
+    // Supabase එකට සේව් කිරීම
     await supabase.from("messages").insert({
       shop_id: shopId,
       sender_jid: senderJid,
