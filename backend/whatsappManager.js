@@ -49,7 +49,6 @@ async function createSession(shopId, clientSocket) {
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
-      console.log(`[${shopId}] QR code received — forwarding to client`);
       clientSocket.emit("qr", { qr });
       clientSocket.emit("status", { status: "connecting" });
     }
@@ -62,25 +61,18 @@ async function createSession(shopId, clientSocket) {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-      console.log(
-        `[${shopId}] Connection closed. Code: ${statusCode}. Reconnect: ${shouldReconnect}`
-      );
-
       clientSocket.emit("status", { status: "disconnected" });
 
       if (shouldReconnect) {
-        console.log(`[${shopId}] Attempting reconnection in 3s…`);
         setTimeout(() => createSession(shopId, clientSocket), 3000);
       } else {
-        console.log(`[${shopId}] Logged out — clearing auth state`);
         sessions.delete(shopId);
         fs.rmSync(authPath(shopId), { recursive: true, force: true });
       }
     }
   });
 
-  // ── Incoming messages → replyEngine ────────────────────────────────────────
+  // ── Incoming messages → replyEngine ──────────────────────────────────────
   waSocket.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
 
@@ -88,19 +80,6 @@ async function createSession(shopId, clientSocket) {
       if (!msg.message || msg.key.fromMe) continue;
 
       const senderJid = msg.key.remoteJid;
-      
-      // 🛑 Ignore group messages
-      if (senderJid.endsWith('@g.us')) {
-        console.log(`[${shopId}] Ignoring group message from ${senderJid}`);
-        continue;
-      }
-      
-      // 🛑 Ignore broadcast/newsletter messages
-      if (senderJid.includes('@newsletter') || senderJid.includes('@broadcast')) {
-        console.log(`[${shopId}] Ignoring broadcast message`);
-        continue;
-      }
-
       const text =
         msg.message?.conversation ||
         msg.message?.extendedTextMessage?.text ||
@@ -126,15 +105,9 @@ async function createSession(shopId, clientSocket) {
 
 async function destroySession(shopId) {
   if (!sessions.has(shopId)) return;
-
   const { cleanup } = sessions.get(shopId);
-  try {
-    cleanup();
-  } catch (_) {
-    // Ignore errors during teardown
-  }
+  try { cleanup(); } catch (_) {}
   sessions.delete(shopId);
-  console.log(`[${shopId}] Session destroyed`);
 }
 
 function hasSession(shopId) {

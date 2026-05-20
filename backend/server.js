@@ -6,6 +6,8 @@ const { createSession, destroySession } = require("./whatsappManager");
 const faqRoutes  = require("./faqRoutes");
 const shopRoutes = require("./shopRoutes");
 const docRoutes  = require("./docRoutes");
+const settingsRoutes = require("./settingsRoutes");
+const statsRoutes = require("./statsRoutes");
 
 const PORT = process.env.PORT || 5000;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
@@ -17,6 +19,8 @@ app.use(express.json());
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
 app.use("/api/faqs", faqRoutes);
 app.use("/api/docs", docRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/stats", statsRoutes);
 app.use("/api", shopRoutes);
 
 const httpServer = http.createServer(app);
