@@ -1,0 +1,27 @@
+# Exported from Render on 2026-05-20T17:49:37Z
+version: "1"
+projects:
+- name: whatsapp-bot
+  environments:
+  - name: Production
+    services:
+    - type: web
+      name: whatsapp-bot-backend
+      runtime: node
+      repo: https://github.com/soheilycreations/whatsapp-platform
+      plan: free
+      envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: FRONTEND_ORIGIN
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      region: singapore
+      buildCommand: npm install
+      startCommand: node server.js
+      healthCheckPath: /health
+      autoDeployTrigger: commit
+      rootDir: backend
