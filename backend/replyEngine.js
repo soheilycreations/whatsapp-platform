@@ -1,16 +1,20 @@
 /**
  * replyEngine.js
- * Uses Soheily Creations AI API
+ * Native Gemini AI Integration + Strict Regex Fallbacks (No External Axios Needed)
  */
 
-const axios = require("axios");
+const { GoogleGenerativeAI } = require("@google/generative-ai");
 const supabase = require("./supabaseClient");
 
-const AI_API_URL = process.env.AI_API_URL || "http://localhost:5000/api/ai";
+let genAI;
+if (process.env.GEMINI_API_KEY) {
+  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+}
+
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
 
-// ── Keyword match ─────────────────────────────────────────────────────────────
+// ── Keyword match (Strict exact word matching via RegEx) ─────────────────────
 async function keywordMatch(shopId, text) {
   const { data: faqs } = await supabase
     .from("faqs")
@@ -20,16 +24,23 @@ async function keywordMatch(shopId, text) {
 
   if (!faqs || faqs.length === 0) return null;
 
-  const lower = text.toLowerCase();
+  const lowerText = text.toLowerCase();
   for (const faq of faqs) {
-    if (faq.keywords?.some((kw) => lower.includes(kw.toLowerCase()))) {
-      return faq.answer;
-    }
-    if (lower.includes(faq.question.toLowerCase())) {
-      return faq.answer;
+    if (faq.keywords && faq.keywords.length > 0) {
+      for (const kw of faq.keywords) {
+        const lowerKw = kw.toLowerCase();
+        const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
+        if (regex.test(lowerText) || lowerText === lowerKw) {
+          return faq.answer;
+        }
+      }
     }
   }
   return null;
+}
+
+function escapeRegExp(string) {
+  return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 // ── Build context ─────────────────────────────────────────────────────────────
@@ -46,24 +57,23 @@ async function buildContext(shopId) {
     .eq("shop_id", shopId);
 
   let context = "";
-
   if (faqs && faqs.length > 0) {
-    context += "FAQ: " + faqs.map((f) => `${f.question} - ${f.answer}`).join(" | ");
+    context += "## FAQ Reference:\n" + faqs.map((f) => `Q: ${f.question} -> A: ${f.answer}`).join("\n");
   }
-
   if (docs && docs.length > 0) {
-    let docContent = "";
-    docs.forEach((doc) => {
-      docContent += doc.content.slice(0, 1500) + " ";
-    });
-    context += " DOCUMENTS: " + docContent;
+    context += "\n\n## Business Documents:\n";
+    docs.forEach((doc) => { context += `${doc.content.slice(0, 1500)} `; });
   }
-
-  return context.slice(0, 2000);
+  return context;
 }
 
-// ── AI reply via Soheily API ───────────────────────────────────────────────────
+// ── Direct Native Gemini AI Reply ─────────────────────────────────────────────
 async function aiReply(shopId, senderJid, text) {
+  if (!genAI) {
+    console.error(`[${shopId}] Gemini API Key missing in environment variables`);
+    return null;
+  }
+
   try {
     const context = await buildContext(shopId);
 
@@ -72,37 +82,48 @@ async function aiReply(shopId, senderJid, text) {
     }
     const history = conversationHistory.get(senderJid);
 
+    const systemPrompt = `You are a smart, friendly, and helpful WhatsApp sales assistant for "Soheily Creations". 
+Use the following FAQ and context to answer user questions nicely in a catchy way.
+Reply in the SAME language the customer uses (Sinhala, English, or Singlish). Keep it brief (2-3 sentences max).
+
+CONTEXT:
+${context}`;
+
+    console.log(`[${shopId}] Calling Native Gemini API for: ${text.substring(0, 50)}...`);
+
+    // Resilient model fallback
+    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"];
+    let responseText = null;
+
+    for (const modelName of models) {
+      try {
+        const model = genAI.getGenerativeModel({ model: modelName });
+        
+        let fullPrompt = `${systemPrompt}\n\n`;
+        history.slice(-4).forEach(msg => {
+          fullPrompt += msg.role === "user" ? `Customer: ${msg.content}\n` : `Bot: ${msg.content}\n`;
+        });
+        fullPrompt += `Customer: ${text}\nBot:`;
+
+        const result = await model.generateContent(fullPrompt);
+        responseText = result.response.text();
+        if (responseText) break;
+      } catch (err) {
+        console.error(`[${shopId}] Model ${modelName} failed, trying next...`);
+      }
+    }
+
+    if (!responseText) return null;
+
     history.push({ role: "user", content: text });
+    history.push({ role: "assistant", content: responseText });
 
-    console.log(`[${shopId}] Calling AI API for: ${text.substring(0, 50)}...`);
+    if (history.length > MAX_HISTORY * 2) history.splice(0, 2);
 
-    const response = await axios.post(
-      `${AI_API_URL}/generate`,
-      {
-        text: text,
-        context: context,
-        history: history.slice(-4),
-      },
-      { timeout: 20000 }
-    );
-
-    const reply = response.data?.reply;
-
-    if (!reply) {
-      console.log(`[${shopId}] AI returned empty reply`);
-      return null;
-    }
-
-    history.push({ role: "assistant", content: reply });
-
-    if (history.length > MAX_HISTORY * 2) {
-      history.splice(0, 2);
-    }
-
-    console.log(`[${shopId}] AI reply: ${reply.substring(0, 50)}...`);
-    return reply;
+    console.log(`[${shopId}] Gemini reply success!`);
+    return responseText;
   } catch (err) {
-    console.error(`[${shopId}] AI API error:`, err.message);
+    console.error(`[${shopId}] Native AI Error:`, err.message);
     return null;
   }
 }
@@ -135,33 +156,29 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. Keyword match first (fast)
-    reply = await keywordMatch(shopId, text);
-    if (reply) {
-      replyType = "keyword";
-      console.log(`[${shopId}] ✓ Keyword match`);
-    }
+    // 1. Try AI First
+    reply = await aiReply(shopId, senderJid, text);
+    if (reply) replyType = "ai";
 
-    // 2. AI fallback
+    // 2. Keyword Fallback if AI fails
     if (!reply) {
-      try {
-        reply = await aiReply(shopId, senderJid, text);
-        if (reply) {
-          replyType = "ai";
-          console.log(`[${shopId}] ✓ AI reply`);
-        }
-      } catch (err) {
-        console.error(`[${shopId}] AI error:`, err.message);
-      }
+      console.log(`[${shopId}] AI failed. Trying strict keyword matching...`);
+      reply = await keywordMatch(shopId, text);
+      if (reply) replyType = "keyword_fallback";
     }
 
-    // 3. Send reply
+    // 3. Final Closing Fallback
+    if (!reply) {
+      console.log(`[${shopId}] Sending closing fallback...`);
+      reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ AI පද්ධතිය කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
+      replyType = "closing_fallback";
+    }
+
     if (reply) {
       await waSocket.sendMessage(senderJid, { text: reply });
       console.log(`[${shopId}] → Sent (${replyType})`);
     }
 
-    // 4. Log
     await logMessage(shopId, senderJid, text, reply, replyType);
   } catch (err) {
     console.error(`[${shopId}] Error:`, err.message);
