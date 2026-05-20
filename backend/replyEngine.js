@@ -88,11 +88,17 @@ async function aiReply(shopId, senderJid, text) {
     }
     const history = conversationHistory.get(senderJid);
 
-    // AI එකට දෙන නියෝගය (System Prompt)
+    // AI එකට දෙන නියෝගය (Strict Constrained System Prompt)
     const systemPrompt = `You are a smart, friendly, and helpful WhatsApp sales assistant for "Soheily Creations" (Sri Lanka).
 Use the provided FAQ and Context to answer user questions beautifully.
+
+Strict Rules for Greeting:
+- ONLY say "Ayubowan" or greeting words if the customer is starting the conversation (like "Hi", "Hello", "Ayubowan").
+- DO NOT repeat "Ayubowan", hello, or welcome messages in subsequent replies if the conversation is already ongoing. Just answer the question directly.
+
+Response Style:
 - If the question is about pricing, WhatsApp bots, websites, or POS, give precise details based on context.
-- Keep answers short and professional (Max 2-3 sentences).
+- Keep answers short, natural, and professional (Max 2-3 sentences).
 - Reply in the EXACT same language the user writes (If they write in Singlish, reply in Singlish/Sinhala. If Sinhala, reply in Sinhala).
 - ALWAYS rely on the context data below to provide accurate answers.
 
@@ -168,7 +174,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       replyType = "database_faq";
       console.log(`[${shopId}] ✓ Found in FAQ Database`);
 
-      // FAQ එකෙන් දෙන උත්තරෙත් හිස්ට්‍රි එකට දානවා (එතකොට ඊළඟ පාර AI එක දන්නවා FAQ එකෙන් උත්තරයක් දීලා තියෙන්නේ කියලා)
+      // FAQ එකෙන් දෙන උත්තරෙත් හිස්ට්‍රි එකට දาනවා (එතකොට ඊළඟ පාර AI එක දන්නවා FAQ එකෙන් උත්තරයක් දීලා තියෙන්නේ කියලා)
       if (!conversationHistory.has(senderJid)) conversationHistory.set(senderJid, []);
       const hist = conversationHistory.get(senderJid);
       hist.push({ role: "user", content: text });
