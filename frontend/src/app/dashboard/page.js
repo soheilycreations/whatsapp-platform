@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import { BarChart3, MessageSquare, Users, TrendingUp, AlertCircle } from "lucide-react";
-import { chart_display_v0 } from "@/hooks/useChart";
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
 const SHOP_ID = "shop_123";
@@ -20,14 +19,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchStats();
-    const interval = setInterval(fetchStats, 30000); // Refresh every 30s
+    const interval = setInterval(fetchStats, 30000);
     return () => clearInterval(interval);
   }, []);
 
   async function fetchStats() {
-    const res = await fetch(`${BACKEND_URL}/api/stats/${SHOP_ID}`);
-    const data = await res.json();
-    setStats(data);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/stats/${SHOP_ID}`);
+      const data = await res.json();
+      setStats(data);
+    } catch (err) {
+      console.error("Stats error:", err);
+    }
     setLoading(false);
   }
 
@@ -41,15 +44,12 @@ export default function DashboardPage() {
 
   return (
     <div className="px-8 py-8">
-      {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold text-white tracking-tight">Dashboard</h1>
         <p className="text-sm text-slate-400 mt-1">Real-time WhatsApp bot performance</p>
       </div>
 
-      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
-        {/* Today's Messages */}
         <div className="glass rounded-2xl p-5 border border-purple-700/30 hover:border-purple-600/50 transition-all">
           <div className="flex items-center justify-between mb-2">
             <MessageSquare className="h-5 w-5 text-purple-400" />
@@ -61,7 +61,6 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500 mt-1">messages received</p>
         </div>
 
-        {/* Week's Messages */}
         <div className="glass rounded-2xl p-5 border border-blue-700/30 hover:border-blue-600/50 transition-all">
           <div className="flex items-center justify-between mb-2">
             <BarChart3 className="h-5 w-5 text-blue-400" />
@@ -73,7 +72,6 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500 mt-1">total messages</p>
         </div>
 
-        {/* Active Customers */}
         <div className="glass rounded-2xl p-5 border border-green-700/30 hover:border-green-600/50 transition-all">
           <div className="flex items-center justify-between mb-2">
             <Users className="h-5 w-5 text-green-400" />
@@ -85,7 +83,6 @@ export default function DashboardPage() {
           <p className="text-xs text-slate-500 mt-1">unique customers</p>
         </div>
 
-        {/* Reply Rate */}
         <div className="glass rounded-2xl p-5 border border-orange-700/30 hover:border-orange-600/50 transition-all md:col-span-2 lg:col-span-2">
           <div className="flex items-center justify-between mb-2">
             <TrendingUp className="h-5 w-5 text-orange-400" />
@@ -100,7 +97,6 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Top Questions */}
       <div className="glass rounded-2xl p-6 border border-slate-700/30">
         <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
           <AlertCircle className="h-5 w-5 text-yellow-400" />
@@ -133,7 +129,6 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* Footer */}
       <div className="mt-6 glass rounded-xl px-4 py-3 flex items-center justify-between text-xs text-slate-600">
         <span>Auto-refreshes every 30 seconds</span>
         <button onClick={fetchStats} className="text-slate-400 hover:text-slate-300">
