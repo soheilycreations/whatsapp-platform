@@ -157,6 +157,12 @@ ${context}`;
 // ── Main handler (FAQ First, Then AI Fallback) ──────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
+    // 🚨 💡 FIX: ගෲප් මැසේජ් එකක් නම් මෙතනින්ම නවත්වන්න (Do not reply to groups)
+    if (senderJid && senderJid.endsWith("@g.us")) {
+      console.log(`[${shopId}] Ignored group message from: ${senderJid}`);
+      return; 
+    }
+
     const { data: shop } = await supabase
       .from("shops")
       .select("auto_reply")
@@ -168,20 +174,19 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. 💡 පළවෙනි පියවර: මුලින්ම FAQ / Keywords චෙක් කරනවා (Fast & 100% Correct)
+    // 1. පළවෙනි පියවර: මුලින්ම FAQ / Keywords චෙක් කරනවා
     reply = await keywordMatch(shopId, text);
     if (reply) {
       replyType = "database_faq";
       console.log(`[${shopId}] ✓ Found in FAQ Database`);
 
-      // FAQ එකෙන් දෙන උත්තරෙත් හිස්ට්‍රි එකට දาනවා (එතකොට ඊළඟ පාර AI එක දන්නවා FAQ එකෙන් උත්තරයක් දීලා තියෙන්නේ කියලා)
       if (!conversationHistory.has(senderJid)) conversationHistory.set(senderJid, []);
       const hist = conversationHistory.get(senderJid);
       hist.push({ role: "user", content: text });
       hist.push({ role: "assistant", content: reply });
     }
 
-    // 2. දෙවැනි පියවර: FAQ එකේ නැත්නම් විතරක් Gemini AI එකට දෙනවා (Smart Handling)
+    // 2. දෙවැනි පියවර: FAQ එකේ නැත්නම් විතරක් Gemini AI එකට දෙනවා
     if (!reply) {
       reply = await aiReply(shopId, senderJid, text);
       if (reply) {
@@ -190,7 +195,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       }
     }
 
-    // 3. තුන්වැනි පියවර: දෙකම නැත්නම් විතරක් "Busy" මැසේජ් එක දෙනවා (බොට් ගොළු වෙන්නේ නැහැ)
+    // 3. තුන්වැනි පියවර: දෙකම නැත්නම් විතරක් "Busy" මැසේජ් එක දෙනවා
     if (!reply) {
       console.log(`[${shopId}] Both FAQ and AI unavailable. Sending closing fallback...`);
       reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ පද්ධතිය තරමක් කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
@@ -201,7 +206,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     await waSocket.sendMessage(senderJid, { text: reply });
     console.log(`[${shopId}] → Sent (${replyType})`);
 
-    // Supabase එකට මැසේජ් එක සේව් කිරීම (Dashboard එකට පේන්න)
+    // Supabase එකට මැසේජ් එක සේව් කිරීම
     await supabase.from("messages").insert({
       shop_id: shopId,
       sender_jid: senderJid,
