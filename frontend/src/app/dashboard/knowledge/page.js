@@ -21,70 +21,135 @@ export default function KnowledgeBasePage() {
   const [activeTab, setActiveTab] = useState("faqs");
   const fileRef = useRef();
 
-  useEffect(() => { fetchFaqs(); fetchShop(); fetchDocs(); }, []);
+  useEffect(() => {
+    async function loadData() {
+      setLoading(true);
+      await Promise.all([fetchFaqs(), fetchShop(), fetchDocs()]);
+      setLoading(false);
+    }
+    loadData();
+  }, []);
 
   async function fetchFaqs() {
-    setLoading(true);
-    const res = await fetch(`${BACKEND_URL}/api/faqs?shopId=${SHOP_ID}`);
-    setFaqs(await res.json());
-    setLoading(false);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/faqs?shopId=${SHOP_ID}`);
+      if (!res.ok) throw new Error(`Status: ${res.status}`);
+      
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        setFaqs(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching FAQs:", err);
+      setFaqs([]);
+    }
   }
 
   async function fetchDocs() {
-    const res = await fetch(`${BACKEND_URL}/api/docs?shopId=${SHOP_ID}`);
-    setDocs(await res.json());
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/docs?shopId=${SHOP_ID}`);
+      if (!res.ok) throw new Error(`Status: ${res.status}`);
+
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        setDocs(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error("❌ Error fetching docs:", err);
+      setDocs([]);
+    }
   }
 
   async function fetchShop() {
-    const res = await fetch(`${BACKEND_URL}/api/shop/${SHOP_ID}`);
-    const data = await res.json();
-    setAutoReply(data.auto_reply);
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/shop/${SHOP_ID}`);
+      if (!res.ok) throw new Error(`Status: ${res.status}`);
+
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (data && typeof data.auto_reply !== "undefined") {
+          setAutoReply(data.auto_reply);
+        }
+      }
+    } catch (err) {
+      console.error("❌ Error fetching shop settings:", err);
+    }
   }
 
   async function toggleAutoReply() {
     const newVal = !autoReply;
     setAutoReply(newVal);
-    await fetch(`${BACKEND_URL}/api/shop/${SHOP_ID}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ auto_reply: newVal }),
-    });
+    try {
+      await fetch(`${BACKEND_URL}/api/shop/${SHOP_ID}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_reply: newVal }),
+      });
+    } catch (err) {
+      console.error("❌ Failed to update auto-reply on server:", err);
+    }
   }
 
   async function saveFaq() {
     if (!form.question || !form.answer) return;
     setSaving(true);
-    const keywords = form.keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
-    const url    = editingId ? `${BACKEND_URL}/api/faqs/${editingId}` : `${BACKEND_URL}/api/faqs`;
-    const method = editingId ? "PATCH" : "POST";
-    const body   = editingId
-      ? { question: form.question, answer: form.answer, keywords }
-      : { shop_id: SHOP_ID, question: form.question, answer: form.answer, keywords };
+    try {
+      const keywords = form.keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean);
+      const url    = editingId ? `${BACKEND_URL}/api/faqs/${editingId}` : `${BACKEND_URL}/api/faqs`;
+      const method = editingId ? "PATCH" : "POST";
+      const body   = editingId
+        ? { question: form.question, answer: form.answer, keywords }
+        : { shop_id: SHOP_ID, question: form.question, answer: form.answer, keywords };
 
-    await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    setForm({ question: "", answer: "", keywords: "" });
-    setShowForm(false); setEditingId(null); setSaving(false);
-    fetchFaqs();
+      const res = await fetch(url, { 
+        method, 
+        headers: { "Content-Type": "application/json" }, 
+        body: JSON.stringify(body) 
+      });
+
+      if (res.ok) {
+        setForm({ question: "", answer: "", keywords: "" });
+        setShowForm(false); 
+        setEditingId(null);
+        await fetchFaqs();
+      }
+    } catch (err) {
+      console.error("❌ Error saving FAQ:", err);
+    } finally {
+      setSaving(false);
+    }
   }
 
   async function deleteFaq(id) {
     if (!confirm("Delete this FAQ?")) return;
-    await fetch(`${BACKEND_URL}/api/faqs/${id}`, { method: "DELETE" });
-    fetchFaqs();
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/faqs/${id}`, { method: "DELETE" });
+      if (res.ok) fetchFaqs();
+    } catch (err) {
+      console.error("❌ Error deleting FAQ:", err);
+    }
   }
 
   async function toggleActive(faq) {
-    await fetch(`${BACKEND_URL}/api/faqs/${faq.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ is_active: !faq.is_active }),
-    });
-    fetchFaqs();
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/faqs/${faq.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ is_active: !faq.is_active }),
+      });
+      if (res.ok) fetchFaqs();
+    } catch (err) {
+      console.error("❌ Error toggling active state:", err);
+    }
   }
 
   function startEdit(faq) {
     setForm({ question: faq.question, answer: faq.answer, keywords: (faq.keywords || []).join(", ") });
-    setEditingId(faq.id); setShowForm(true);
+    setEditingId(faq.id); 
+    setShowForm(true);
   }
 
   async function handleFileUpload(e) {
@@ -100,35 +165,45 @@ export default function KnowledgeBasePage() {
     try {
       const res = await fetch(`${BACKEND_URL}/api/docs/upload`, { method: "POST", body: formData });
       
-      // සර්වර් එකෙන් Timeout හෝ වෙනත් Error එකක් ආවොත් Crash නොවී මෙතනින් බේරගන්නවා
       if (!res.ok) {
         setUploadMsg({ 
           type: "error", 
-          text: `❌ Server responded with status ${res.status}. Please try a smaller file or text file.` 
+          text: `❌ Server responded with status ${res.status}. Please check your backend logs.` 
         });
         setUploading(false);
         fileRef.current.value = "";
         return;
       }
 
-      const data = await res.json();
-      if (data.success) {
-        setUploadMsg({ type: "success", text: `✅ "${file.name}" uploaded! ${data.doc.content_length} characters extracted.` });
-        fetchDocs();
+      const contentType = res.headers.get("content-type");
+      if (contentType && contentType.includes("application/json")) {
+        const data = await res.json();
+        if (data.success) {
+          setUploadMsg({ type: "success", text: `✅ "${file.name}" uploaded successfully!` });
+          await fetchDocs();
+        } else {
+          setUploadMsg({ type: "error", text: `❌ ${data.error || "Upload failed"}` });
+        }
       } else {
-        setUploadMsg({ type: "error", text: `❌ ${data.error}` });
+        setUploadMsg({ type: "error", text: "❌ Server didn't return a valid JSON response." });
       }
     } catch (err) {
-      setUploadMsg({ type: "error", text: "❌ Upload failed. Request timeout or server connection lost." });
+      console.error("❌ Upload error:", err);
+      setUploadMsg({ type: "error", text: "❌ Upload failed. Connection lost or request timeout." });
+    } finally {
+      setUploading(false);
+      fileRef.current.value = "";
     }
-    setUploading(false);
-    fileRef.current.value = "";
   }
 
   async function deleteDoc(id) {
     if (!confirm("Delete this document?")) return;
-    await fetch(`${BACKEND_URL}/api/docs/${id}`, { method: "DELETE" });
-    fetchDocs();
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/docs/${id}`, { method: "DELETE" });
+      if (res.ok) fetchDocs();
+    } catch (err) {
+      console.error("❌ Error deleting document:", err);
+    }
   }
 
   function fileIcon(fileType) {
