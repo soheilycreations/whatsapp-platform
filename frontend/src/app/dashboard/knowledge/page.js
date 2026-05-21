@@ -3,7 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { BookOpen, Plus, Trash2, Pencil, Check, X, Tag, ToggleLeft, ToggleRight, Upload, FileText, File, AlertCircle } from "lucide-react";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+const baseEnvUrl = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:5000";
+const BACKEND_URL = baseEnvUrl.endsWith("/") ? baseEnvUrl.slice(0, -1) : baseEnvUrl;
 const SHOP_ID = "shop_123";
 
 export default function KnowledgeBasePage() {
