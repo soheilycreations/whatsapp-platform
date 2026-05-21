@@ -1,51 +1,54 @@
+bash
+
+cat > /mnt/user-data/outputs/whatsapp-platform/backend/shopRoutes.js << 'EOF'
 /**
  * shopRoutes.js
- * REST API for messages + shop settings.
+ * Shop management endpoints
  */
 
 const express = require("express");
 const router = express.Router();
 const supabase = require("./supabaseClient");
 
-// GET /api/messages?shopId=shop_123&limit=50
-router.get("/messages", async (req, res) => {
-  const { shopId, limit = 50 } = req.query;
-  if (!shopId) return res.status(400).json({ error: "shopId required" });
-
-  const { data, error } = await supabase
-    .from("messages")
-    .select("*")
-    .eq("shop_id", shopId)
-    .order("created_at", { ascending: false })
-    .limit(Number(limit));
-
-  if (error) return res.status(500).json({ error: error.message });
-  res.json(data);
-});
-
 // GET /api/shop/:id
 router.get("/shop/:id", async (req, res) => {
+  const { id } = req.params;
   const { data, error } = await supabase
     .from("shops")
     .select("*")
-    .eq("id", req.params.id)
+    .eq("id", id)
     .single();
 
   if (error) return res.status(500).json({ error: error.message });
   res.json(data);
 });
 
-// PATCH /api/shop/:id  (toggle auto_reply etc.)
+// PATCH /api/shop/:id
 router.patch("/shop/:id", async (req, res) => {
+  const { id } = req.params;
+  const updates = req.body;
+
+  console.log(`[${id}] Updating shop:`, updates);
+
   const { data, error } = await supabase
     .from("shops")
-    .update(req.body)
-    .eq("id", req.params.id)
+    .update(updates)
+    .eq("id", id)
     .select()
     .single();
 
-  if (error) return res.status(500).json({ error: error.message });
+  if (error) {
+    console.error(`[${id}] Update error:`, error);
+    return res.status(500).json({ error: error.message });
+  }
+
+  console.log(`[${id}] ✓ Shop updated`);
   res.json(data);
 });
 
 module.exports = router;
+EOF
+echo "✅ shopRoutes.js fixed"
+Output
+
+✅ shopRoutes.js fixed
