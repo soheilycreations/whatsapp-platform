@@ -1,17 +1,10 @@
 /**
  * replyEngine.js
- * Native Gemini AI Integration + Smart FAQ Priority + Official Chat Sessions
+ * OpenRouter AI Integration + Smart FAQ Priority + Chat History
  * Fully robust, production-ready WhatsApp Automation Engine for Soheily Creations.
  */
 
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 const supabase = require("./supabaseClient");
-
-// Render Environment Variables වලින් කෙලින්ම Gemini Key එක ගන්නවා
-let genAI = null;
-if (process.env.GEMINI_API_KEY) {
-  genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-}
 
 const conversationHistory = new Map();
 const MAX_HISTORY = 10;
@@ -33,7 +26,6 @@ async function keywordMatch(shopId, text) {
       for (const kw of faq.keywords) {
         const lowerKw = kw.toLowerCase();
         
-        // Exact keyword එකක්ද කියලා RegEx එකෙන් බලනවා
         const regex = new RegExp(`\\b${escapeRegExp(lowerKw)}\\b`, 'i');
         
         if (regex.test(lowerText) || lowerText === lowerKw) {
@@ -73,14 +65,31 @@ async function buildContext(shopId) {
   return context;
 }
 
-// ── Native Gemini AI Reply (Official Chat Session Method) ─────────────────────
+// ── OpenRouter API Reply (Dynamic Client Routing) ─────────────────────────────
 async function aiReply(shopId, senderJid, text) {
-  if (!genAI) {
-    console.error(`[${shopId}] GEMINI_API_KEY is missing in Render!`);
-    return null;
-  }
-
   try {
+    // 1. Supabase එකෙන් shop එකට වෙන් කරපු openrouter_api_key එකක් තියෙනවද බලනවා
+    const { data: shopData } = await supabase
+      .from("shops")
+      .select("openrouter_api_key") // 💡 Column name එක openrouter_api_key ලෙස උපකල්පනය කර ඇත
+      .eq("id", shopId)
+      .single();
+
+    let apiKey = null;
+
+    if (shopData?.openrouter_api_key) {
+      console.log(`[${shopId}] Using Client-Specific OpenRouter Key from DB.`);
+      apiKey = shopData.openrouter_api_key;
+    } else if (process.env.OPENROUTER_API_KEY) {
+      console.log(`[${shopId}] Using Global OpenRouter Key from Render.`);
+      apiKey = process.env.OPENROUTER_API_KEY;
+    }
+
+    if (!apiKey) {
+      console.error(`[${shopId}] ERROR: No OpenRouter API Key found!`);
+      return null;
+    }
+
     const context = await buildContext(shopId);
 
     if (!conversationHistory.has(senderJid)) {
@@ -88,7 +97,7 @@ async function aiReply(shopId, senderJid, text) {
     }
     const history = conversationHistory.get(senderJid);
 
-    // AI එකට දෙන නියෝගය (Strict Constrained System Prompt)
+    // System Prompt (Trained & Constrained)
     const systemPrompt = `You are a smart, friendly, and helpful WhatsApp sales assistant for "Soheily Creations" (Sri Lanka).
 Use the provided FAQ and Context to answer user questions beautifully.
 
@@ -97,7 +106,6 @@ Strict Rules for Greeting:
 - DO NOT repeat "Ayubowan", hello, or welcome messages in subsequent replies if the conversation is already ongoing. Just answer the question directly.
 
 Response Style:
-- If the question is about pricing, WhatsApp bots, websites, or POS, give precise details based on context.
 - Keep answers informative but concise (Max 3-4 sentences).
 - Reply in the EXACT same language the user writes (If they write in Singlish, reply in Singlish/Sinhala. If Sinhala, reply in Sinhala).
 - ALWAYS rely on the context data below to provide accurate answers.
@@ -105,41 +113,43 @@ Response Style:
 CONTEXT DATA:
 ${context}`;
 
-    console.log(`[${shopId}] Calling Official Gemini Chat API for: ${text}...`);
+    console.log(`[${shopId}] Calling OpenRouter API for: ${text}...`);
 
-    // Model Fallback Array (404 එන්නේ නැති වෙන්න ස්ටේබල් මොඩල්ස් විතරක් දැම්මා)
-    const models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"];
-    let replyText = null;
+    // OpenRouter එකේ තියෙන ලාභම සහ හොඳම Gemini මොඩල් එක
+    const modelName = "google/gemini-2.5-flash"; 
 
-    const formattedHistory = history.map(msg => ({
-      role: msg.role === "assistant" ? "model" : "user",
-      parts: [{ text: msg.content }]
-    }));
+    // OpenAI Format එකට හිස්ට්‍රි එක සකස් කිරීම
+    const messages = [
+      { role: "system", content: systemPrompt },
+      ...history.map(msg => ({ role: msg.role, content: msg.content })),
+      { role: "user", content: text }
+    ];
 
-    for (const modelName of models) {
-      try {
-        const model = genAI.getGenerativeModel({ 
-          model: modelName,
-          systemInstruction: systemPrompt
-        });
-        
-        // 💡 FIX DONE: maxOutputTokens 1000 දක්වා වැඩි කරා බාගෙට කැපෙන එක නවත්වන්න
-        const chat = model.startChat({
-          history: formattedHistory,
-          generationConfig: { maxOutputTokens: 1000 } 
-        });
+    // OpenRouter Native Fetch Request එක
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://soheilycreations.com", // 💡 OpenRouter එකට අවශ්‍යයි
+        "X-Title": "Soheily WhatsApp Bot"
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: messages,
+        max_tokens: 1000 // 💡 මැසේජ් බාගෙට කැපෙන එක සදහටම නවත්තන්න 1000 දැම්මා
+      })
+    });
 
-        const result = await chat.sendMessage(text);
-        replyText = result.response.text();
-        
-        if (replyText) break;
-      } catch (e) {
-        console.error(`[${shopId}] Model ${modelName} chat session failed:`, e.message);
-      }
+    const data = await response.json();
+    const replyText = data.choices?.[0]?.message?.content;
+
+    if (!replyText) {
+      console.error(`[${shopId}] OpenRouter Error Response:`, data);
+      return null;
     }
 
-    if (!replyText) return null;
-
+    // හිස්ට්‍රි එක අප්ඩේට් කිරීම
     history.push({ role: "user", content: text });
     history.push({ role: "assistant", content: replyText });
 
@@ -147,7 +157,7 @@ ${context}`;
 
     return replyText;
   } catch (err) {
-    console.error(`[${shopId}] Gemini Native Chat Top Level Error:`, err.message);
+    console.error(`[${shopId}] OpenRouter Top Level Error:`, err.message);
     return null;
   }
 }
@@ -155,7 +165,6 @@ ${context}`;
 // ── Main handler (FAQ First, Then AI Fallback) ──────────────────────────────────
 async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
   try {
-    // ගෲප් මැසේජ් බ්ලොක් එක
     if (senderJid && senderJid.endsWith("@g.us")) {
       console.log(`[${shopId}] Ignored group message from: ${senderJid}`);
       return; 
@@ -172,7 +181,7 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
     let reply = null;
     let replyType = "none";
 
-    // 1. මුලින්ම FAQ / Keywords චෙක් කිරීම
+    // 1. FAQ / Keywords චෙක් කිරීම
     reply = await keywordMatch(shopId, text);
     if (reply) {
       replyType = "database_faq";
@@ -184,27 +193,25 @@ async function handleIncomingMessage(shopId, senderJid, text, waSocket) {
       hist.push({ role: "assistant", content: reply });
     }
 
-    // 2. FAQ එකේ නැත්නම් Gemini AI එකට දීම
+    // 2. AI Fallback (OpenRouter)
     if (!reply) {
       reply = await aiReply(shopId, senderJid, text);
       if (reply) {
-        replyType = "gemini_ai";
-        console.log(`[${shopId}] ✓ Generated by Gemini AI`);
+        replyType = "openrouter_ai";
+        console.log(`[${shopId}] ✓ Generated by OpenRouter AI`);
       }
     }
 
-    // 3. Falling back
+    // 3. Fallback Closing
     if (!reply) {
       console.log(`[${shopId}] Both FAQ and AI unavailable. Sending closing fallback...`);
       reply = "ඔබගේ පණිවිඩයට බොහොම ස්තූතියි! ✨ මේ වෙලාවේ අපේ පද්ධතිය තරමක් කාර්යබහුලයි. අපගේ නියෝජිතයෙකු ඉතා ඉක්මනින් ඔබව පෞද්ගලිකව සම්බන්ධ කරගනු ඇත. සුභ දවසක්! 😊🙏";
       replyType = "closing_fallback";
     }
 
-    // WhatsApp එකෙන් මැසේජ් එක යැවීම
     await waSocket.sendMessage(senderJid, { text: reply });
     console.log(`[${shopId}] → Sent (${replyType})`);
 
-    // Supabase එකට සේව් කිරීම
     await supabase.from("messages").insert({
       shop_id: shopId,
       sender_jid: senderJid,
