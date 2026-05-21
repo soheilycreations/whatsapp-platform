@@ -1,6 +1,3 @@
-bash
-
-cat > /mnt/user-data/outputs/whatsapp-platform/backend/shopRoutes.js << 'EOF'
 /**
  * shopRoutes.js
  * Shop management endpoints
@@ -47,8 +44,3 @@ router.patch("/shop/:id", async (req, res) => {
 });
 
 module.exports = router;
-EOF
-echo "✅ shopRoutes.js fixed"
-Output
-
-✅ shopRoutes.js fixed
