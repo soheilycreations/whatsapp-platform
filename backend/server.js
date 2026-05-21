@@ -17,10 +17,11 @@ app.use(cors({ origin: FRONTEND_ORIGIN, methods: ["GET","POST","PATCH","DELETE"]
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
-app.use("/api/faqs", faqRoutes);
-app.use("/api/docs", docRoutes);
-app.use("/api/settings", settingsRoutes);
-app.use("/api/stats", statsRoutes);
+// server.js එකේ මැද හරියේ තියෙන app.use ටික මේ විදිහට විතරක් තියන්න:
+app.use("/api", faqRoutes);
+app.use("/api", docRoutes);
+app.use("/api", settingsRoutes);
+app.use("/api", statsRoutes);
 app.use("/api", shopRoutes);
 
 const httpServer = http.createServer(app);
