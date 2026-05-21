@@ -97,7 +97,19 @@ export default function KnowledgeBasePage() {
     formData.append("shopId", SHOP_ID);
 
     try {
-      const res  = await fetch(`${BACKEND_URL}/api/docs/upload`, { method: "POST", body: formData });
+      const res = await fetch(`${BACKEND_URL}/api/docs/upload`, { method: "POST", body: formData });
+      
+      // සර්වර් එකෙන් Timeout හෝ වෙනත් Error එකක් ආවොත් Crash නොවී මෙතනින් බේරගන්නවා
+      if (!res.ok) {
+        setUploadMsg({ 
+          type: "error", 
+          text: `❌ Server responded with status ${res.status}. Please try a smaller file or text file.` 
+        });
+        setUploading(false);
+        fileRef.current.value = "";
+        return;
+      }
+
       const data = await res.json();
       if (data.success) {
         setUploadMsg({ type: "success", text: `✅ "${file.name}" uploaded! ${data.doc.content_length} characters extracted.` });
@@ -106,7 +118,7 @@ export default function KnowledgeBasePage() {
         setUploadMsg({ type: "error", text: `❌ ${data.error}` });
       }
     } catch (err) {
-      setUploadMsg({ type: "error", text: "❌ Upload failed. Try again." });
+      setUploadMsg({ type: "error", text: "❌ Upload failed. Request timeout or server connection lost." });
     }
     setUploading(false);
     fileRef.current.value = "";
