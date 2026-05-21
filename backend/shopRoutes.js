@@ -7,7 +7,10 @@ const express = require("express");
 const router = express.Router();
 const supabase = require("./supabaseClient");
 
-// GET /api/shop/:id
+// 🔥 ඉදිරියට '/api' කෑල්ල නැතුව කෙළින්ම රවුට් එක විතරක් ලියන්න
+// (මොකද server.js එකෙන් අපි මුළු ෆයිල් එකටම '/api' කෑල්ල දෙනවා)
+
+// GET /api/shop/:id -> (ෆයිල් එක ඇතුළේ ලියන්නේ '/shop/:id')
 router.get("/shop/:id", async (req, res) => {
   const { id } = req.params;
   const { data, error } = await supabase
@@ -20,7 +23,7 @@ router.get("/shop/:id", async (req, res) => {
   res.json(data);
 });
 
-// PATCH /api/shop/:id
+// PATCH /api/shop/:id -> (ෆයිල් එක ඇතුළේ ලියන්නේ '/shop/:id')
 router.patch("/shop/:id", async (req, res) => {
   const { id } = req.params;
   const updates = req.body;
