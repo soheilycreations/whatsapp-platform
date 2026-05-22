@@ -1,5 +1,5 @@
 /**
- * replyEngine.js — OpenRouter AI Version
+ * replyEngine.js — OpenRouter AI Version (Strict Knowledge Base)
  */
 
 const axios = require("axios");
@@ -45,20 +45,20 @@ async function buildContext(shopId) {
 
   let context = "";
 
+  if (docs && docs.length > 0) {
+    context += "## BUSINESS RULES & KNOWLEDGE DOCUMENTS\n";
+    docs.forEach((doc) => {
+      context += `### ${doc.file_name}\n${doc.content.slice(0, 4000)}\n\n`;
+    });
+  }
+
   if (faqs && faqs.length > 0) {
-    context += "## FAQs\n";
+    context += "## QUICK FAQ ANSWERS\n";
     context += faqs.map((f) => `Q: ${f.question}\nA: ${f.answer}`).join("\n\n");
     context += "\n\n";
   }
 
-  if (docs && docs.length > 0) {
-    context += "## Business Documents\n";
-    docs.forEach((doc) => {
-      context += `### ${doc.file_name}\n${doc.content.slice(0, 3000)}\n\n`;
-    });
-  }
-
-  return context || "No knowledge base available.";
+  return context || "No knowledge base configured yet.";
 }
 
 // ── OpenRouter AI reply ───────────────────────────────────────────────────────
@@ -83,60 +83,83 @@ async function aiReply(shopId, senderJid, text) {
     history.splice(0, 2);
   }
 
-  const systemPrompt = `You are a smart, friendly WhatsApp sales assistant for this business.
+  const systemPrompt = `You are the official AI sales assistant for this business. Your ONLY job is to answer customer questions using the KNOWLEDGE BASE provided below.
 
-RULES:
-- Reply in the SAME language the customer uses (Sinhala, English, Tamil, etc.)
-- Keep replies SHORT (2-4 sentences max for WhatsApp)
-- Use emojis naturally 😊
-- If a product/service is not available, suggest the closest alternative
-- Always guide customer toward making a purchase or booking
-- Never say "I don't know" — ask them to contact directly instead
-- Be warm, helpful, and professional
+CRITICAL RULES — FOLLOW STRICTLY:
+1. ONLY use information from the KNOWLEDGE BASE below. Do NOT make up prices, services, or details.
+2. If the knowledge base has specific rules, tone, or persona instructions — follow them EXACTLY.
+3. Reply in the EXACT SAME language the customer uses (Sinhala → Sinhala reply, English → English reply).
+4. Keep replies SHORT — max 3-4 sentences for WhatsApp. No long paragraphs.
+5. If customer asks something NOT in the knowledge base, say you will connect them with the team.
+6. NEVER invent or guess information. Use ONLY what is in the knowledge base.
+7. Use emojis naturally but sparingly.
 
-BUSINESS KNOWLEDGE BASE:
-${context}`;
+═══════════════════════════════════════
+KNOWLEDGE BASE — YOUR ONLY SOURCE OF TRUTH:
+═══════════════════════════════════════
+${context}
+═══════════════════════════════════════`;
 
-  try {
-    const response = await axios.post(
-      "https://openrouter.ai/api/v1/chat/completions",
-      {
-        model: process.env.OPENROUTER_MODEL || "mistralai/mistral-7b-instruct:free",
-        messages: [
-          { role: "system", content: systemPrompt },
-          ...history,
-        ],
-        max_tokens: 300,
-        temperature: 0.7,
-      },
-      {
-        headers: {
-          "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://whatsapp-bot-backend-27d8.onrender.com",
-          "X-Title": "WhatsApp Bot Platform",
+  const models = [
+    process.env.OPENROUTER_MODEL || "google/gemini-2.0-flash-001",
+    "anthropic/claude-haiku-4-5",
+    "openai/gpt-4o-mini",
+    "google/gemma-3-1b-it:free",
+  ];
+
+  for (const model of models) {
+    try {
+      console.log(`[${shopId}] Trying model: ${model}`);
+
+      const response = await axios.post(
+        "https://openrouter.ai/api/v1/chat/completions",
+        {
+          model,
+          messages: [
+            { role: "system", content: systemPrompt },
+            ...history,
+          ],
+          max_tokens: 300,
+          temperature: 0.5,
         },
-        timeout: 30000,
+        {
+          headers: {
+            "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://whatsapp-bot-backend-27d8.onrender.com",
+            "X-Title": "WhatsApp Bot Platform",
+          },
+          timeout: 30000,
+        }
+      );
+
+      const reply = response.data?.choices?.[0]?.message?.content?.trim();
+
+      if (!reply) {
+        console.log(`[${shopId}] Empty reply from ${model}, trying next...`);
+        continue;
       }
-    );
 
-    const reply = response.data?.choices?.[0]?.message?.content?.trim();
+      // Save assistant reply to history
+      history.push({ role: "assistant", content: reply });
 
-    if (!reply) {
-      console.log(`[${shopId}] OpenRouter returned empty reply`);
-      return null;
+      console.log(`[${shopId}] ✓ OpenRouter reply (${model}): ${reply.substring(0, 80)}...`);
+      return reply;
+
+    } catch (err) {
+      const code = err.response?.data?.error?.code;
+      console.error(`[${shopId}] ${model} error (${code}):`, err.response?.data?.error?.message || err.message);
+
+      // If rate limited or not found, try next model
+      if (code === 429 || code === 404) continue;
+
+      // Other errors - stop trying
+      break;
     }
-
-    // Save assistant reply to history
-    history.push({ role: "assistant", content: reply });
-
-    console.log(`[${shopId}] ✓ OpenRouter reply: ${reply.substring(0, 60)}...`);
-    return reply;
-
-  } catch (err) {
-    console.error(`[${shopId}] OpenRouter error:`, err.response?.data || err.message);
-    return null;
   }
+
+  console.log(`[${shopId}] All models failed`);
+  return null;
 }
 
 // ── Log to Supabase ───────────────────────────────────────────────────────────
