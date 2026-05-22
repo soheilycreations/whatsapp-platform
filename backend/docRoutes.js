@@ -70,8 +70,8 @@ async function extractText(buffer, mimetype, filename) {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-// 🔥 POST /api/docs/upload
-router.post("/docs/upload", upload.single("file"), async (req, res) => {
+// POST /api/docs/upload
+router.post("/upload", upload.single("file"), async (req, res) => {
   try {
     const { shopId } = req.body;
     if (!shopId) return res.status(400).json({ error: "shopId required" });
@@ -115,8 +115,8 @@ router.post("/docs/upload", upload.single("file"), async (req, res) => {
   }
 });
 
-// 🔥 GET /api/docs?shopId=shop_123
-router.get("/docs", async (req, res) => {
+// GET /api/docs?shopId=shop_123
+router.get("/", async (req, res) => {
   const { shopId } = req.query;
   if (!shopId) return res.status(400).json({ error: "shopId required" });
 
@@ -139,8 +139,8 @@ router.get("/docs", async (req, res) => {
   res.json(docs);
 });
 
-// 🔥 DELETE /api/docs/:id
-router.delete("/docs/:id", async (req, res) => {
+// DELETE /api/docs/:id
+router.delete("/:id", async (req, res) => {
   const { error } = await supabase
     .from("knowledge_docs")
     .delete()

@@ -3,11 +3,13 @@ const http = require("http");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const { createSession, destroySession } = require("./whatsappManager");
-const faqRoutes  = require("./faqRoutes");
+const faqRoutes = require("./faqRoutes");
 const shopRoutes = require("./shopRoutes");
-const docRoutes  = require("./docRoutes");
+const docRoutes = require("./docRoutes");
 const settingsRoutes = require("./settingsRoutes");
 const statsRoutes = require("./statsRoutes");
+const aiRoutes = require("./aiRoutes");
+const authRoutes = require("./authRoutes");
 
 const PORT = process.env.PORT || 5000;
 const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || "http://localhost:3000";
@@ -17,11 +19,12 @@ app.use(cors({ origin: FRONTEND_ORIGIN, methods: ["GET","POST","PATCH","DELETE"]
 app.use(express.json());
 
 app.get("/health", (_req, res) => res.json({ status: "ok" }));
-// server.js එකේ මැද හරියේ තියෙන app.use ටික මේ විදිහට විතරක් තියන්න:
-app.use("/api", faqRoutes);
-app.use("/api", docRoutes);
-app.use("/api", settingsRoutes);
-app.use("/api", statsRoutes);
+app.use("/api/faqs", faqRoutes);
+app.use("/api/docs", docRoutes);
+app.use("/api/settings", settingsRoutes);
+app.use("/api/stats", statsRoutes);
+app.use("/api/ai", aiRoutes);
+app.use("/api/auth", authRoutes);
 app.use("/api", shopRoutes);
 
 const httpServer = http.createServer(app);
